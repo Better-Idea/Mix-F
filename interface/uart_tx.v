@@ -1,8 +1,6 @@
 `timescale 1ns / 1ps
 
-`define uart_parity_none        0
-`define uart_parity_even        2
-`define uart_parity_odd         3
+`include"define.v"
 
 module uart_tx(
     input                       reset,
@@ -13,7 +11,7 @@ module uart_tx(
     output reg                  need_load   = 0,
     output reg                  out         = 1
 );
-    // 1bit start + 15bit data(max) + 1bit parity + 1bit stop
+    // 1bit start + 16bit data(max) + 1bit parity + 1bit stop
     parameter uart_state_send_start_bit     = 0;
     parameter uart_state_send_data_bits     = 1;
     parameter uart_state_send_parity_bit    = 2;
