@@ -9,7 +9,7 @@ module uart_rx(
     input                       in,
     output reg                  error_parity    = 0,
     output reg                  error_stop_bit  = 0,
-    output reg                  need_store      = 0,
+    output reg                  req_store       = 0,
     output reg  [15:0]          bits            = 0
 );
     // 1bit start + 16bit data(max) + 1bit parity + 1bit stop
@@ -22,47 +22,45 @@ module uart_rx(
     reg         [ 2:0]          step            = 0;
     reg         [ 2:0]          state           = uart_state_receive_start_bit;
     reg                         latch           = 1;
-    reg                         old_in          = 1;
     reg                         check           = 0; // 奇偶校验
 
 always @ (posedge clock_x8 or negedge reset) begin
     if (reset == 0) begin
-        // error_parity            = 0;
-        // error_stop_bit          = 0;
-        // need_store              = 0;
-        // bits                    = 0;
-        // i                       = 0;
-        step                    = 0;
-        state                   = uart_state_receive_start_bit;
-        old_in                  = 1;
-        latch                   = 1;
-        // check                   = 0;
-    end else begin
-        step                    = step + 1;
-
-        if (step == 4) begin
-            latch               = old_in;
+        error_parity                = 0;
+        error_stop_bit              = 0;
+        req_store                   = 0;
+        bits                        = 0;
+        i                           = 0;
+        step                        = 0;
+        state                       = uart_state_receive_start_bit;
+        latch                       = 1;
+        check                       = 0;
+    end else if (state == uart_state_receive_start_bit) begin
+        if (latch) begin
+            latch                   = in;
+            step                    = 0;
+        end else begin
+            state                   = step == 7 ? uart_state_receive_data_bits : uart_state_receive_start_bit;
+            step                    = step + 1;
         end
 
-        if (step == 0) begin
-            old_in              = in; 
+        if (state == uart_state_receive_data_bits) begin
+            error_parity            = 0;
+            error_stop_bit          = 0;
+            req_store               = 0;
+            i                       = 0;
+            check                   = 0;
+        end
+    end else begin
+        if (step == 3) begin
+            latch                   = in;
+
             case (state)
-            uart_state_receive_start_bit    : begin
-                if (latch == 0) begin
-                    error_parity    = 0;
-                    error_stop_bit  = 0;
-                    need_store      = 0;
-                    bits            = 0;
-                    i               = 0;
-                    state           = uart_state_receive_data_bits;
-                    check           = 0;
-                end
-            end
             uart_state_receive_data_bits    : begin
                 bits[i]             = latch;
                 check               = check ^ latch;
                 i                   = i + 1;
-    
+
                 if (i == width) begin
                     state           = parity[1] ? 
                         uart_state_receive_parity_bit : 
@@ -73,17 +71,13 @@ always @ (posedge clock_x8 or negedge reset) begin
                 error_parity        = check ^ latch ^ parity[0];
                 state               = uart_state_receive_stop_bit;
             end
-            uart_state_receive_stop_bit     : begin
-                if (latch == 1) begin
-                    need_store      = 1;
-                end else begin
-                    error_stop_bit  = 1;
-                end
+            default                         : begin
+                req_store           = latch;
+                error_stop_bit      = ! latch;
                 state               = uart_state_receive_start_bit;
             end endcase
         end
+
+        step                        = step + 1;
     end
 end endmodule
-
-
-

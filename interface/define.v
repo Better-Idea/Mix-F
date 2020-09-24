@@ -1,5 +1,3 @@
-`timescale 1ns / 1ps
-
 `ifndef xinterface_define
 `define xinterface_define
 
