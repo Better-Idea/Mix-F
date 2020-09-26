@@ -1,25 +1,46 @@
-`timescale 1ns / 1ps
 
 module parallel_to_serial(
-    input                       reset,
-    input                       clock,
-    input       [ 4:0]          width,
-    input       [31:0]          bits,
-    output reg                  need_load = 0,
-    output reg                  out       = 0
+    reset,
+    clock,
+    width,
+    data,
+    need_load,
+    out
 );
-    reg [4:0] i = 0;
+    parameter                   max_width   = 16;
+    parameter                   bits        = 
+        max_width <   1 ? -1:
+        max_width <=  2 ?  0:
+        max_width <=  4 ?  1:
+        max_width <=  8 ?  2:
+        max_width <= 16 ?  3:
+        max_width <= 32 ?  4:
+        max_width <= 64 ?  5: -1;
 
-always @ (posedge clock or negedge reset) begin
+    input                       reset;
+    input                       clock;
+    input       [bits:0]        width;
+    input       [max_width:0]   data;
+    output reg                  need_load   = 1;
+    output reg                  out         = 0;
+
+    reg                         need_reset  = 0;
+
+    (* KEEP="TRUE"*)
+    reg         [bits:0]        i           = 0;
+
+always @ (negedge reset or posedge clock) begin
     if (reset == 0) begin
-        i           = 0;
-        need_load   = 0;
+        need_reset  = 1;
+    end else if (need_reset) begin
+        need_load   = 1;
         out         = 0;
+        need_reset  = 0;
+        i           = 0;
     end else begin
-        out         = bits[i];
-        i           = i + 1;
-        need_load   = i == width;
-        i           = need_load ? 0 : i;
+        out         = data[i];
+        i           = i + 1/*norrow & overflow*/ == width ? 0 : i + 1;
+        need_load   = i == 0;
     end
 end
 endmodule

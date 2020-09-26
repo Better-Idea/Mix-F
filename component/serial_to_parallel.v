@@ -1,25 +1,47 @@
-`timescale 1ns / 1ps
+
 
 module serial_to_parallel(
-    input                       reset,
-    input                       clock,
-    input       [ 4:0]          width,
-    input                       in,
-    output reg  [31:0]          bits        = 0,
-    output reg                  need_store  = 0
+    reset,
+    clock,
+    width,
+    in,
+    need_store,
+    data
 );
-    reg [4:0] i = 0;
+    parameter                   max_width   = 16;
+    parameter                   bits        = 
+        max_width <   1 ? -1:
+        max_width <=  2 ?  0:
+        max_width <=  4 ?  1:
+        max_width <=  8 ?  2:
+        max_width <= 16 ?  3:
+        max_width <= 32 ?  4:
+        max_width <= 64 ?  5: -1;
 
-always @ (posedge clock or negedge reset) begin
+    input                       reset;
+    input                       clock;
+    input       [bits:0]        width;
+    input                       in;
+    output reg                  need_store  = 0;
+    output reg  [max_width:0]   data        = 0;
+
+    reg                         need_reset  = 0;
+
+    (* KEEP="TRUE"*)
+    reg         [bits:0]        i           = 0;
+
+always @ (negedge reset or posedge clock) begin
     if (reset == 0) begin
-        i           = 0;
-        bits        = 0;
+        need_reset  = 1;
+    end else if (need_reset) begin
         need_store  = 0;
+        data        = 0;
+        need_reset  = 0;
+        i           = 0;
     end else begin
-        bits[i]     = in;
-        i           = i + 1;
-        need_store  = i == width;
-        i           = need_store ? 0 : i;
+        data[i]     = in;
+        i           = i + 1 == width ? 0 : i + 1;
+        need_store  = i == 0;
     end
 end
 endmodule
