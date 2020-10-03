@@ -5,8 +5,6 @@ module clock_division(
     i_top,
     o_clock
 );
-    input               i_reset;
-    input               i_clock;
 
     parameter           max_counter = 256;
     parameter           bits = 
@@ -41,18 +39,20 @@ module clock_division(
         max_counter <= 536870912  ? 29 :
         max_counter <= 1073741824 ? 30 : -1;
 
-    output reg                  o_clock   = 0;
-
+    input               i_reset;
+    input               i_clock;
     input      [bits - 1:0]     i_top;
+    output reg                  o_clock     = 0;
+
     reg        [bits - 1:0]     t           = 0;
     reg        [bits - 1:0]     counter     = 1;
 always @ (posedge i_clock or posedge i_reset) begin
     if (i_reset) begin
-        o_clock                   = 0;
+        o_clock                     = 0;
         t                           = 0;
         counter                     = 1;
     end else begin
-        o_clock                   = t;
+        o_clock                     = t;
         t                           = counter == i_top;
         counter                     = t ? 1 : counter + 1;
     end
