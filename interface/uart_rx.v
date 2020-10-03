@@ -1,83 +1,80 @@
-`timescale 1ns / 1ps
-`include"define.v"
+`include"uart_define.v"
 
 module uart_rx(
-    input                       reset,
-    input                       clock_x8,
-    input       [ 1:0]          parity,
-    input       [ 3:0]          width,
-    input                       in,
-    output reg                  error_parity    = 0,
-    output reg                  error_stop_bit  = 0,
-    output reg                  req_store       = 0,
-    output reg  [15:0]          bits            = 0
+    input                       i_reset,
+    input                       i_clock_x8,
+    input       [ 1:0]          i_parity,
+    input       [ 3:0]          i_data_width,
+    input                       i_data,
+    output reg                  o_error_parity      = 0,
+    output reg                  o_error_stop_bit    = 0,
+    output reg                  o_store_req         = 0,
+    output reg  [15:0]          o_data              = 0
 );
-    // 1bit start + 16bit data(max) + 1bit parity + 1bit stop
-    parameter uart_state_receive_start_bit      = 0;
-    parameter uart_state_receive_data_bits      = 1;
-    parameter uart_state_receive_parity_bit     = 2;
-    parameter uart_state_receive_stop_bit       = 3;
+    // 1bit start + 16bit o_data(max) + 1bit i_parity + 1bit stop
+    parameter rx_start_bit                      = 0;
+    parameter rx_data_bits                      = 1;
+    parameter rx_parity_bit                     = 2;
+    parameter rx_stop_bit                       = 3;
 
     reg         [ 3:0]          i               = 0;
     reg         [ 2:0]          step            = 0;
-    reg         [ 2:0]          state           = uart_state_receive_start_bit;
+    reg         [ 2:0]          state           = rx_start_bit;
     reg                         latch           = 1;
-    reg                         check           = 0; // 奇偶校验
-
-always @ (posedge clock_x8 or negedge reset) begin
-    if (reset == 0) begin
-        error_parity                = 0;
-        error_stop_bit              = 0;
-        req_store                   = 0;
-        bits                        = 0;
+    reg                         check           = 0; // parity check
+always @ (posedge i_reset or posedge i_clock_x8) begin
+    if (i_reset) begin
+        o_error_parity              = 0;
+        o_error_stop_bit            = 0;
+        o_store_req                 = 0;
+        o_data                      = 0;
         i                           = 0;
         step                        = 0;
-        state                       = uart_state_receive_start_bit;
+        state                       = rx_start_bit;
         latch                       = 1;
         check                       = 0;
-    end else if (state == uart_state_receive_start_bit) begin
+    end else if (state == rx_start_bit) begin
         if (latch) begin
-            latch                   = in;
+            latch                   = i_data;
             step                    = 0;
+            state                   = rx_start_bit;
         end else begin
-            state                   = step == 7 ? uart_state_receive_data_bits : uart_state_receive_start_bit;
+            state                   = step == 7 ? rx_data_bits : rx_start_bit;
             step                    = step + 1;
         end
 
-        if (state == uart_state_receive_data_bits) begin
-            error_parity            = 0;
-            error_stop_bit          = 0;
-            req_store               = 0;
-            i                       = 0;
-            check                   = 0;
-        end
+        o_error_parity              = 0;
+        o_error_stop_bit            = 0;
+        o_store_req                 = 0;
+        i                           = 0;
+        check                       = 0;
     end else begin
-        if (step == 3) begin
-            latch                   = in;
+        step                        = step + 1;
+
+        if (step[2:0] == 4) begin
+            latch                   = i_data;
 
             case (state)
-            uart_state_receive_data_bits    : begin
-                bits[i]             = latch;
+            rx_data_bits: begin
+                o_data[i]           = latch;
                 check               = check ^ latch;
                 i                   = i + 1;
 
-                if (i == width) begin
-                    state           = parity[1] ? 
-                        uart_state_receive_parity_bit : 
-                        uart_state_receive_stop_bit;
+                if (i == i_data_width) begin
+                    state           = i_parity[1] ? 
+                        rx_parity_bit : 
+                        rx_stop_bit;
                 end
             end
-            uart_state_receive_parity_bit   : begin
-                error_parity        = check ^ latch ^ parity[0];
-                state               = uart_state_receive_stop_bit;
+            rx_parity_bit: begin
+                o_error_parity      = check ^ latch ^ i_parity[0];
+                state               = rx_stop_bit;
             end
-            default                         : begin
-                req_store           = latch;
-                error_stop_bit      = ! latch;
-                state               = uart_state_receive_start_bit;
+            default: begin
+                o_store_req         =  latch;
+                o_error_stop_bit    = ~latch;
+                state               = rx_start_bit;
             end endcase
         end
-
-        step                        = step + 1;
     end
 end endmodule
