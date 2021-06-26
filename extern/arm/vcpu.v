@@ -88,7 +88,7 @@ always @(posedge sck) begin
             // cmd[9]
             // - 0:add
             // - 1:sub
-            `define IS_SUB      (cmd[9])
+            `define IS_NEG      (cmd[9])
 
             `define RM          (cmd[8:6])
             `define RN          (cmd[5:3])
@@ -99,7 +99,7 @@ always @(posedge sck) begin
             // T1: ADD RD, RN, IMM3
             // T1: SUB RD, RN, IMM3
             { a } = `IS_IMM_RM ? `RM : r[`RM];
-            { b } = `IS_SUB ? -a : a;
+            { b } = `IS_NEG ? -a : a;
             { msb_eq } = r[`RN][`REG_MSB] == b[`REG_MSB];
             { tmp_cf, r[`RD] } = r[`RN] + b;
             { b } = r[`RD];
@@ -107,7 +107,7 @@ always @(posedge sck) begin
             { tmp_vf } = msb_eq ? r[`RN][`REG_MSB] != b[`REG_MSB] : 0;
 
             `undef IS_IMM_RM
-            `undef IS_SUB
+            `undef IS_NEG
             `undef RM
             `undef RN
             `undef RD
@@ -116,8 +116,10 @@ always @(posedge sck) begin
         // 与立即数加、减、赋值、比较
         8'b001?_????: begin
             `define IS_MOV      (`MODE == 0)
+            `define IS_NOT_MOV  (`MODE != 0)
+            `define IS_CMP      (`MODE == 1)
             `define IS_NOT_CMP  (`MODE != 1)
-            `define IS_SUB      (cmd[11])
+            `define IS_NEG      (cmd[11])
             `define MODE        (cmd[12:11])
             `define RDN         (cmd[10:8])
             `define IMM8        (cmd[7:0])
@@ -127,11 +129,11 @@ always @(posedge sck) begin
             // T2: ADD RDN, IMM8
             // T2: SUB RDN, IMM8
             { a } = `IS_MOV ? `ALL_ZERO : r[`RDN];
-            { b } = `IS_SUB ? -`IMM8 : `IMM8;
-            { msb_eq } = r[`RDN][`REG_MSB] == b[`REG_MSB];
+            { b } = `IS_NEG ? -`IMM8 : `IMM8;
+            { msb_eq } = a[`REG_MSB] == b[`REG_MSB];
             { tmp_cf, b } = a + b;
-            { modify_state } = `NOT_IN_ITB;
-            { tmp_vf } = `IS_MOV ? vf : (msb_eq ? r[`RDN][`REG_MSB] != b[`REG_MSB] : 0);
+            { modify_state } = `IS_CMP || (`NOT_IN_ITB && (`IS_NOT_MOV || `RDN != `PC));
+            { tmp_vf } = `IS_MOV ? vf : (msb_eq ? a[`REG_MSB] != b[`REG_MSB] : 0);
 
             // cmp 不修改目的寄存器
             if (`IS_NOT_CMP) begin
@@ -139,8 +141,10 @@ always @(posedge sck) begin
             end
 
             `undef IS_MOV
+            `undef IS_NOT_MOV
+            `undef IS_CMP
             `undef IS_NOT_CMP
-            `undef IS_SUB
+            `undef IS_NEG
             `undef MODE
             `undef RDN
             `undef IMM8
@@ -265,6 +269,36 @@ always @(posedge sck) begin
             `undef RDN
             `undef LEFT
             `undef RIGHT
+        end
+
+        // TODO：与 8'b001?_???? 雷同 =======================
+        8'b0100_01??: begin
+            `define MODE        (cmd[9:8])
+            `define RM          (cmd[6:3])
+            `define RDN         ({ cmd[7], cmd[2:0] })
+            `define IS_CMP      (`MODE == 1)
+            `define IS_NOT_CMP  (`MODE != 1)
+            `define IS_MOV      (`MODE == 2)
+            `define IS_NOT_MOV  (`MODE != 2)
+
+            { a } = `IS_MOV ? `ALL_ZERO : r[`RDN];
+            { b } = `IS_CMP ? -r[`RM] : r[`RM];
+            { msb_eq } = a[`REG_MSB] == b[`REG_MSB];
+            { tmp_cf, b } = a + b;
+            { modify_state } = `IS_CMP || (`NOT_IN_ITB && (`IS_NOT_MOV || `RDN != `PC));
+            { tmp_vf } = `IS_MOV ? vf : (msb_eq ? a[`REG_MSB] != b[`REG_MSB] : 0);
+
+            if (`IS_NOT_CMP) begin
+                r[`RDN] = b;
+            end
+
+            `undef MODE
+            `undef RM
+            `undef RDN
+            `undef IS_CMP
+            `undef IS_NOT_CMP
+            `undef IS_MOV
+            `undef IS_NOT_MOV
         end
 
         default: begin
