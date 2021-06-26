@@ -220,6 +220,8 @@ always @(posedge sck) begin
                 end
             end
 
+            need_modify_vf = 0;
+
             `undef IS_AND
             `undef IS_XOR
             `undef IS_LSL
