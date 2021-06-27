@@ -1,154 +1,268 @@
 // 目标：低功耗设计
 `timescale 1ns/1ps
 
-`define PC              4'd15
-`define LR              4'd14
-`define REG_MSB         31
-`define ALL_ONE         32'hffff_ffff
-`define ALL_ZERO        32'h0000_0000
-`define NOT_IN_ITB      (!in_it_block)
-`define IN_ITB          (in_it_block)
-`define SYS_BITS        32
+`define PC                  4'd15
+`define LR                  4'd14
+`define REG_MSB             31
+`define ALL_ONE             32'hffff_ffff
+`define ALL_ZERO            32'h0000_0000
+`define NOT_IN_ITB          (!in_it_block)
+`define NOT_LAST_IN_ITB     (!last_in_it_block)
+`define IN_ITB              (in_it_block)
+`define SYS_BITS            32
+`define SYS_BITS_PLUS1      6'd33
+`define SYS_BITS_SUB3       29
+`define SYS_BITS_SUB8       24
+
+// 修改一个寄存器的放在低组
+`define B_LOW               0
+`define I_SHIFT             0
+`define I_ADD               1
+`define I_MUL               2
+`define I_BITWISE           3
+
+// 修改 2 个寄存器的放在高组
+`define B_HIG               10
+`define I_BL                10
+
+`define I_MAX               15 /*当 I_MAX 需要变大时需要修改下方 d 的元素个数*/
 
 module vcpu(
     input           sck,
-    input [15:0]    cmd
+    input  [15:0]   cmd,
+    output [31:0]   opt,
+    output [31:0]   sta
 );
-    // public
-    reg [31:0] r[0:15];
-    reg in_it_block = 0;
-    reg cf = 0;
-    reg zf = 0;
-    reg nf = 0;
-    reg vf = 0;
 
-    // private
-    reg [31:0] a;   // adddition
-    reg [31:0] b;   // temp
-    reg tmp_cf = 0;
-    reg tmp_zf = 0;
-    reg tmp_nf = 0;
-    reg tmp_vf = 0;
-    reg msb_eq = 0;
+// public
+reg [31:0] r[0:15];
+reg in_it_block = 0;
+reg last_in_it_block = 0;
+reg cf = 0;
+reg zf = 0;
+reg nf = 0;
+reg vf = 0;
 
-    // 修改该标志位寄存器
-    reg modify_state = 0;
-    reg m0;
-    reg m1;
+// private
+wire[31:0] d[`B_LOW:`I_MAX];    // 目的寄存器
+wire[31:0] e[`B_HIG:`I_MAX];    // 目的寄存器
+wire[15:0] tmp_cf;
+wire[15:0] tmp_vf;
+wire[15:0] msb_eq;
+reg [ 4:0] reg_ds;
+reg [ 4:0] reg_es;
+reg [31:0] n;                   // d = n op m
+reg [31:0] m;
+
+reg [31:0] tmp_ds_shift  ;
+reg [31:0] tmp_ds_add    ;
+reg [31:0] tmp_ds_mul    ;
+reg [31:0] tmp_ds_bitwise;
+reg [31:0] tmp_ds_bl     ;
+
+reg [31:0] tmp_es_bl;
+
+reg tmp_cf_shift  , tmp_vf_shift  , msb_eq_shift  , tmp_zf_shift  , tmp_of_shift  ;
+reg tmp_cf_add    , tmp_vf_add    , msb_eq_add    , tmp_zf_add    , tmp_of_add    ;
+reg tmp_cf_mul    , tmp_vf_mul    , msb_eq_mul    , tmp_zf_mul    , tmp_of_mul    ;
+reg tmp_cf_bitwise, tmp_vf_bitwise, msb_eq_bitwise, tmp_zf_bitwise, tmp_of_bitwise;
+reg tmp_cf_bl     , tmp_vf_bl     , msb_eq_bl     , tmp_zf_bl     , tmp_of_bl     ;
+
+// 修改该标志位寄存器
+reg modify_state_req = 0;
+reg modify_state_ack = 0;
+
+// i_serial 最大值不能超过 d 数组的索引
+reg [ 3:0] i_serial = 0;
+
+assign opt = d[i_serial];
+assign sta[31] = nf;
+assign sta[30] = zf;
+assign sta[29] = cf;
+assign sta[28] = vf;
+
+assign d     [`I_SHIFT  ] = tmp_ds_shift  ;
+assign d     [`I_ADD    ] = tmp_ds_add    ;
+assign d     [`I_MUL    ] = tmp_ds_mul    ;
+assign d     [`I_BITWISE] = tmp_ds_bitwise;
+assign d     [`I_BL     ] = tmp_ds_bl     ;
+assign e     [`I_BL     ] = tmp_es_bl     ;
+
+assign tmp_cf[`I_SHIFT  ] = tmp_cf_shift  , tmp_vf[`I_SHIFT  ] = tmp_vf_shift  , msb_eq[`I_SHIFT  ] = msb_eq_shift  ;
+assign tmp_cf[`I_ADD    ] = tmp_cf_add    , tmp_vf[`I_ADD    ] = tmp_vf_add    , msb_eq[`I_ADD    ] = msb_eq_add    ;
+assign tmp_cf[`I_MUL    ] = tmp_cf_mul    , tmp_vf[`I_MUL    ] = tmp_vf_mul    , msb_eq[`I_MUL    ] = msb_eq_mul    ;
+assign tmp_cf[`I_BITWISE] = tmp_cf_bitwise, tmp_vf[`I_BITWISE] = tmp_vf_bitwise, msb_eq[`I_BITWISE] = msb_eq_bitwise;
+assign tmp_cf[`I_BL     ] = tmp_cf_bl     , tmp_vf[`I_BL     ] = tmp_vf_bl     , msb_eq[`I_BL     ] = msb_eq_bl     ;
+
+`define CAN_WRITE_DS        reg_ds[4] == 0
+`define CAN_WRITE_ES        reg_es[4] == 0
+`define NOT_WRITE_DS        5'h1f
+`define NOT_WRITE_ES        5'h1f
+`define REG_DS              r[reg_ds[3:0]]
+`define REG_ES              r[reg_es[3:0]]
+
+`define CUR_TMP_CF          tmp_cf[i_serial]
+`define CUR_TMP_VF          tmp_vf[i_serial]
+`define CUR_MSB_EQ          msb_eq[i_serial]
+`define CUR_TMP_DS          d[i_serial]
+`define CUR_TMP_ES          e[i_serial]
+
+// 移位操作 ========================================
+`define SHIFT_LEFT          1'b0
+`define SHIFT_RIGHT         1'b1
+
+reg [31:0]  shift_temp      = 0;
+reg [5:0]   shift_bits      = 0;
+reg         shift_direction = 0;    // 0 : left / 1 : right
+reg         shift_with_sign = 0;    // 带符号移位，只对右移有效
+reg         shift_with_loop = 0;    // 循环移位，只对右移有效
+reg         shift_req       = 0;
+reg         shift_ack       = 0;
+
+always @(posedge (shift_req != shift_ack)) begin
+    shift_bits = m[7:0] > `SYS_BITS ? `SYS_BITS_PLUS1 : m[5:0];
+
+    if (shift_direction == `SHIFT_LEFT) begin // 左移
+        { tmp_cf_shift, tmp_ds_shift } = { cf, n } << shift_bits;
+    end else begin // 右移
+        { tmp_ds_shift, shift_temp } = {
+            { `SYS_BITS_PLUS1{ shift_with_sign && n[`REG_MSB] } }, n, `ALL_ZERO
+        } >> (shift_with_loop ? { 1'b0, m[4:0] } : { shift_bits });
+
+        { tmp_ds_shift } = shift_temp[`REG_MSB];
+
+        if (shift_with_loop) begin
+            tmp_ds_shift = tmp_ds_shift | shift_temp;
+        end
+    end
+
+    // 不更改 vf
+    { tmp_vf_shift } = vf;
+    { shift_ack } = shift_req;
+end
+
+// 加法操作 ========================================
+reg add_with_cf             = 0;
+reg add_req                 = 0;
+reg add_ack                 = 0;
+
+always @(posedge (add_req != add_ack)) begin
+    { msb_eq_add } = n[`REG_MSB] == m[`REG_MSB];
+    { tmp_cf_add, tmp_ds_add } = n + m + add_with_cf;
+    { tmp_vf_add } = msb_eq_add ? n[`REG_MSB] != tmp_ds_add[`REG_MSB] : 0;
+    { add_ack } = add_req;
+end
+
+// 乘法操作 ========================================
+reg mul_req                 = 0;
+reg mul_ack                 = 0;
+
+always @(posedge (mul_req != mul_ack)) begin
+    { tmp_ds_mul } = n * m;
+    { tmp_cf_mul } = cf;
+    { tmp_vf_mul } = vf;
+    { mul_ack } = mul_req;
+end
+
+// 按位操作 ========================================
+// BITWISE MUX
+//
+// C0 = B1 ? ~A : A
+// C1 = B0 ? 32{1} : B
+// C2 = B0 ? 32{1} : A
+// C3 = B1 ? ~B : B
+// C4 = C0 & C1 | C2 & C3
+// 
+// FUNC    EXPR                 m1  m0
+// and     A & B                0   0
+// or      A | B                0   1
+// xor     A ^ B                1   0
+// nand  ~(A & B) -> ~A | ~B    1   1
+reg bitwise_m0              = 0;
+reg bitwise_m1              = 0;
+reg bitwise_req             = 0;
+reg bitwise_ack             = 0;
+
+always @(posedge (bitwise_req != bitwise_ack)) begin
+    { tmp_ds_bitwise } =
+        ((bitwise_m1 ? ~n       : n) & (bitwise_m0 ? `ALL_ONE : m)) | 
+        ((bitwise_m0 ? `ALL_ONE : n) & (bitwise_m1 ? ~m       : m));
+    { tmp_vf_bitwise } = vf;
+    { bitwise_ack } = bitwise_req;
+end
+
+// 转移指令
+reg bl_req                  = 0;
+reg bl_ack                  = 0;
+reg bl_with_link            = 0;
+
+always @(posedge (bl_req != bl_ack)) begin
+    if (bl_with_link) begin
+        { tmp_es_bl } = r[`PC] + 3/*2 + 1*/;
+    end
+
+    { tmp_ds_bl } = m;
+    { bl_ack } = bl_req;
+end
+
 always @(posedge sck) begin
+    // 大部分指令只有一个目的寄存器
+    // 一般只要写入 DS 对应的寄存器就好了
+    { reg_ds } = `NOT_WRITE_DS;
+    { reg_es } = `NOT_WRITE_ES;
+
     casez(cmd[15:8])
         // 移位操作
+        // mov PC, #imm 不更改状态位
         8'b000?_????: begin
-            `define MODE        (cmd[12:11])
-            `define WITH_SIGN   (cmd[12])
-            `define IMM5        (cmd[10:6])
-            `define RM          (cmd[5:3])
-            `define RD          (cmd[2:0])
-            `define LEFT        (`IMM5)
-            `define RIGHT       (`IMM5 == 0 ? 32 : `IMM5)
-
-            // 逻辑右移、算数右移
-            // T1:LSR RD, RM
-            // T1:ASR RD, RM
-            if (`MODE != 0) begin
-                { r[`RD], tmp_cf } = {
-                    `WITH_SIGN && r[`RM][`REG_MSB] ? `ALL_ONE : `ALL_ZERO, r[`RM], 1'b0
-                } >> `RIGHT;
-                { b } = r[`RD];
-                { modify_state } = `NOT_IN_ITB;
-                { tmp_vf } = vf;
-            // T2：mov rm, rd 不允许在 IT 块中
-            end else if (`IMM5 == 0 && `IN_ITB) begin
-                // error
-                // TODO:=============================
-            // 逻辑左移、赋值
-            // 当赋值的目的寄存器是 PC 寄存器时不改变状态位
-            // T2: MOV RM, RD
-            // T1: LSL RM, RD, IMM5
-            end else begin
-                { tmp_cf, r[`RD] } = { cf, r[`RM] } << `LEFT;
-                { b } = r[`RD];
-                { modify_state } = { `IMM5, `RD } != { 5'b0, `PC } && `NOT_IN_ITB;
-                { tmp_vf } = vf;
-            end
-
-            // TODO: opcode 2'b11 invalid
-            `undef MODE
-            `undef WITH_SIGN
-            `undef IMM5
-            `undef RM
-            `undef RD
-            `undef LEFT
-            `undef RIGHT
+            { i_serial } = `I_SHIFT;
+            { reg_ds } = cmd[2:0];  // RD
+            { n } = r[cmd[5:3]];    // RN
+            { m } = cmd[10:6];      // IMM5
+            { shift_direction } = cmd[12:11] ? `SHIFT_RIGHT : `SHIFT_LEFT;
+            { shift_with_sign } = cmd[12];
+            { modify_state_req } = 
+                `NOT_IN_ITB && !(cmd[12:11] == 0 && cmd[10:6] == 0 && reg_ds == `PC) ?
+                !modify_state_ack : modify_state_ack;
+            { shift_req } = !shift_ack;
         end
 
         // 加减法
         8'b0001_1???: begin
-            `define IS_IMM_RM   (cmd[10])
+            `define IS_IMM      (cmd[10])
+            `define IS_NOT_IMM  (cmd[10] == 0)
 
             // cmd[9]
             // - 0:add
             // - 1:sub
             `define IS_NEG      (cmd[9])
 
-            `define RM          (cmd[8:6])
-            `define RN          (cmd[5:3])
-            `define RD          (cmd[2:0])
-
-            // T1: ADD RD, RN, RM
-            // T1: SUB RD, RN, RM
-            // T1: ADD RD, RN, IMM3
-            // T1: SUB RD, RN, IMM3
-            { a } = `IS_IMM_RM ? `RM : r[`RM];
-            { b } = `IS_NEG ? -a : a;
-            { msb_eq } = r[`RN][`REG_MSB] == b[`REG_MSB];
-            { tmp_cf, r[`RD] } = r[`RN] + b;
-            { b } = r[`RD];
-            { modify_state } = `RD != `PC && `NOT_IN_ITB;
-            { tmp_vf } = msb_eq ? r[`RN][`REG_MSB] != b[`REG_MSB] : 0;
-
-            `undef IS_IMM_RM
-            `undef IS_NEG
-            `undef RM
-            `undef RN
-            `undef RD
+            { i_serial } = `I_ADD;
+            { reg_ds } = cmd[2:0];
+            { n } =  r[cmd[5:3]];
+            { m, add_with_cf } = 
+                { `IS_IMM ? { { `SYS_BITS_SUB3{!`IS_IMM/*0*/} }, cmd[8:6], 1'b0 } : { r[cmd[8:6]], 1'b0 } } ^ 
+                { `SYS_BITS_PLUS1{`IS_NEG} };
+            { modify_state_req } = `NOT_IN_ITB ? !modify_state_ack : modify_state_ack;
+            { add_req } = !add_ack;
         end
 
         // 与立即数加、减、赋值、比较
         8'b001?_????: begin
             `define IS_MOV      (`MODE == 0)
-            `define IS_NOT_MOV  (`MODE != 0)
             `define IS_CMP      (`MODE == 1)
-            `define IS_NOT_CMP  (`MODE != 1)
             `define IS_NEG      (cmd[11])
             `define MODE        (cmd[12:11])
-            `define RDN         (cmd[10:8])
+            `define RD          (cmd[10:8])
+            `define RN          (cmd[10:8])
             `define IMM8        (cmd[7:0])
 
-            // T1: MOV RD, IMM8
-            // T1: CMP RN, IMM8
-            // T2: ADD RDN, IMM8
-            // T2: SUB RDN, IMM8
-            { a } = `IS_MOV ? `ALL_ZERO : r[`RDN];
-            { b } = `IS_NEG ? -`IMM8 : `IMM8;
-            { msb_eq } = a[`REG_MSB] == b[`REG_MSB];
-            { tmp_cf, b } = a + b;
-            { modify_state } = `IS_CMP || (`NOT_IN_ITB && (`IS_NOT_MOV || `RDN != `PC));
-            { tmp_vf } = `IS_MOV ? vf : (msb_eq ? a[`REG_MSB] != b[`REG_MSB] : 0);
-
-            // cmp 不修改目的寄存器
-            if (`IS_NOT_CMP) begin
-                r[`RDN] = b;
-            end
-
-            `undef IS_MOV
-            `undef IS_NOT_MOV
-            `undef IS_CMP
-            `undef IS_NOT_CMP
-            `undef IS_NEG
-            `undef MODE
-            `undef RDN
-            `undef IMM8
+            { i_serial } = `I_ADD;
+            { reg_ds } = `IS_CMP ? `NOT_WRITE_DS : `RD;
+            { n } = `IS_MOV ? `ALL_ZERO : r[`RN];
+            { m, add_with_cf } = { {`SYS_BITS_SUB8{`IS_NEG}}, `IMM8 ^ {8{`IS_NEG}}, `IS_NEG };
+            { modify_state_req } = `NOT_IN_ITB ? !modify_state_ack : modify_state_ack;
+            { add_req } = !add_ack;
         end
 
         8'b0100_00??: begin
@@ -168,172 +282,109 @@ always @(posedge sck) begin
             `define IS_MUL      (cmd[9:6] == 4'b1101)
             `define IS_BIC      (cmd[9:6] == 4'b1110)
             `define IS_MVN      (cmd[9:6] == 4'b1111)
-            `define IS_NOT_TST  (!`IS_TST)
-            `define IS_NOT_CMP  (!`IS_CMP)
-            `define IS_NOT_CMN  (!`IS_CMN)
-            `define IS_NOT_MVN  (!`IS_MVN)
+            `define RD          (cmd[2:0])
+            `define RN          (cmd[2:0])
             `define RM          (cmd[5:3])
-            `define RDN         (cmd[2:0])
-            `define LEFT        (r[`RM][7:5] != 0 ? 32 : r[`RM][4:0])
-            `define RIGHT       (`IS_ROR ? { 1'b0, r[`RM][4:0] } : { r[`RM][7:5] != 0, r[`RM][4:0] })
 
-            // BITWISE MUX
-            //
-            // C0 = B1 ? ~A : A
-            // C1 = B0 ? 32{1} : B
-            // C2 = B0 ? 32{1} : A
-            // C3 = B1 ? ~B : B
-            // C4 = C0 & C1 | C2 & C3
-            // 
-            // FUNC    EXPR                 m1  m0
-            // and     A & B                0   0
-            // or      A | B                0   1
-            // xor     A ^ B                1   0
-            // nand  ~(A & B) -> ~A | ~B    1   1
-
-            // T1: AND RDN, RM
-            // T1: XOR RDN, RM
-            // T1: TST RDN, RM
-            // T1: ORR RDN, RM
             if (`IS_AND || `IS_XOR || `IS_TST || `IS_ORR || `IS_BIC) begin
-                a  = `IS_BIC ? ~r[`RM] : r[`RM];
-                m0 = `IS_ORR;
-                m1 = `IS_XOR;
-                b  = ((m1 ? ~r[`RDN] : r[`RDN]) & (m0 ? `ALL_ONE : a)) | 
-                     ((m0 ? `ALL_ONE : r[`RDN]) & (m1 ? ~a : a));
-
-                if (`IS_NOT_TST) begin
-                    r[`RDN] = b;
-                end
-
-                tmp_cf = cf;    // cf 不变
-                tmp_vf = vf;    // vf 不变
-                modify_state = `IS_TST || `NOT_IN_ITB;
-            // T1: MUL RDN, RM
+                { i_serial } = `I_BITWISE;
+                { reg_ds } = `IS_TST ? `NOT_WRITE_DS : `RD;
+                { n } = r[`RN];
+                { m } = `IS_BIC ? ~r[`RM] : r[`RM];
+                { modify_state_req } = `NOT_IN_ITB  ? !modify_state_ack : modify_state_ack;
+                { bitwise_req } = !bitwise_ack;
             end else if (`IS_MUL) begin
-                r[`RDN] *= r[`RM];
-                b = r[`RDN];
-                tmp_cf = cf;    // cf 不变
-                tmp_vf = vf;    // vf 不变
-                modify_state = `NOT_IN_ITB;
-            // T1: LSL RDN, RM
-            end else if (`IS_LSL) begin
-                { tmp_cf, r[`RDN] } = { cf, r[`RDN] } << `LEFT;
-                { b } = r[`RDN];
-                { tmp_vf } = vf;
-                { modify_state } = `NOT_IN_ITB;
-            end else if (`IS_LSR || `IS_ASR || `IS_ROR) begin
-                { r[`RDN], a } = { 
-                    `IS_ASR && r[`RDN][`REG_MSB] ? `ALL_ONE : `ALL_ZERO, r[`RDN], `ALL_ZERO
-                } >> `RIGHT;
-
-                { r[`RDN] } |= `IS_ROR ? a : `ALL_ZERO;
-                { b } = r[`RDN];
-                { tmp_cf } = a[`REG_MSB];
-                { tmp_vf } = vf;
-                { modify_state } = `NOT_IN_ITB;
+                { i_serial } = `I_MUL;
+                { reg_ds } = `RD;
+                { n } = r[`RN];
+                { m } = r[`RM];
+                { modify_state_req } = `NOT_IN_ITB  ? !modify_state_ack : modify_state_ack;
+                { mul_req } = !mul_ack;
+            end else if (`IS_LSL || `IS_LSR || `IS_ASR || `IS_ROR) begin
+                { i_serial } = `I_SHIFT;
+                { reg_ds } = `RD;
+                { n } = r[`RN];
+                { m } = r[`RM];
+                { shift_direction } = `IS_LSL ? `SHIFT_LEFT : `SHIFT_RIGHT;
+                { shift_with_sign } = `IS_ASR;
+                { shift_with_loop } = `IS_ROR;
+                { modify_state_req } = `NOT_IN_ITB ? !modify_state_ack : modify_state_ack;
+                { shift_req } = !shift_ack;
             // `IS_CMN || `IS_CMP || `IS_ADC || `IS_SBC || `IS_RSB || `IS_MVN
             end else begin
-                { a } = `IS_MVN ? 0 : r[`RDN];
-                { b } = `IS_SBC || `IS_CMP || `IS_MVN ? ~a  + `IS_NOT_MVN : a;
-                { msb_eq } = r[`RDN][`REG_MSB] == b[`REG_MSB];
-                { tmp_cf, b } = a + b;
-                { tmp_vf } = `IS_MVN ? vf : (msb_eq ? r[`RDN][`REG_MSB] != b[`REG_MSB] : 0);
-                { modify_state } = `NOT_IN_ITB || `IS_CMN || `IS_CMP;
+                { i_serial } = `I_ADD;
+                { reg_ds } = `IS_CMN || `IS_CMP ? `NOT_WRITE_DS : `RD;
+                { n } = `IS_MVN ? `ALL_ZERO : r[`RN];
+                { m } = r[`RM] ^ { `SYS_BITS{ `IS_SBC || `IS_CMP || `IS_MVN } };
+                { add_with_cf } = `IS_CMP || ((`IS_ADC | `IS_SBC/*thumb 奇怪的定义*/) && cf);
+                { modify_state_req } = `NOT_IN_ITB ? !modify_state_ack : modify_state_ack;
+                { add_req } = !add_ack;
 
-                if (`IS_NOT_CMN && `IS_NOT_CMP) begin
-                    r[`RDN] = b;
-                end
+                // 关于 SBC
+                // d = n - m - !cf
+                // d = n - ~m + (1 - !cf)
+                // d = n - ~m + cf
             end
-
-            `undef IS_AND
-            `undef IS_XOR
-            `undef IS_LSL
-            `undef IS_LSR
-            `undef IS_ASR
-            `undef IS_ADC
-            `undef IS_SBC
-            `undef IS_ROR
-            `undef IS_TST
-            `undef IS_RSB
-            `undef IS_CMP
-            `undef IS_CMN
-            `undef IS_ORR
-            `undef IS_MUL
-            `undef IS_BIC
-            `undef IS_MVN
-            `undef IS_NOT_TST
-            `undef IS_NOT_CMP
-            `undef IS_NOT_CMN
-            `undef IS_NOT_MVN
-            `undef RM
-            `undef RDN
-            `undef LEFT
-            `undef RIGHT
         end
 
-        // TODO：与 8'b001?_???? 雷同 =======================
+        // ADD/CMP/MOV
         8'b0100_01??: begin
             `define MODE        (cmd[9:8])
+            `define RD          {cmd[7], cmd[2:0]}
+            `define RN          {cmd[7], cmd[2:0]}
             `define RM          (cmd[6:3])
-            `define RDN         ({ cmd[7], cmd[2:0] })
             `define IS_CMP      (`MODE == 1)
-            `define IS_NOT_CMP  (`MODE != 1)
             `define IS_MOV      (`MODE == 2)
-            `define IS_NOT_MOV  (`MODE != 2)
 
-            { a } = `IS_MOV ? `ALL_ZERO : r[`RDN];
-            { b } = `IS_CMP ? -r[`RM] : r[`RM];
-            { msb_eq } = a[`REG_MSB] == b[`REG_MSB];
-            { tmp_cf, b } = a + b;
-            { modify_state } = `IS_CMP || (`NOT_IN_ITB && (`IS_NOT_MOV || `RDN != `PC));
-            { tmp_vf } = `IS_MOV ? vf : (msb_eq ? a[`REG_MSB] != b[`REG_MSB] : 0);
-
-            if (`IS_NOT_CMP) begin
-                r[`RDN] = b;
-            end
-
-            `undef MODE
-            `undef RM
-            `undef RDN
-            `undef IS_CMP
-            `undef IS_NOT_CMP
-            `undef IS_MOV
-            `undef IS_NOT_MOV
+            { i_serial } = `I_ADD;
+            { reg_ds } = `IS_CMP ? `NOT_WRITE_DS : `RD;
+            { n } = `IS_MOV ? `ALL_ZERO : r[`RN];
+            { m } = r[`RM] ^ { `SYS_BITS{`IS_CMP} };
+            { add_with_cf } = `IS_CMP;
+            { modify_state_req } = `NOT_IN_ITB && `RD != `PC ? 
+                !modify_state_ack : modify_state_ack;
+            { add_req } = !add_ack;
         end
 
-        // TODO: if InITBlock() && !LastInITBlock()
+        // 转移
         8'b0100_0111: begin
             `define LINK        (cmd[7])
             `define RM          (cmd[6:3])
-            `define CHECK       (cmd[2:0])
+            `define ZERO        (cmd[2:0])
 
-            if (`CHECK == 0 && `NOT_IN_ITB && !(`LINK && `RM == `PC)) begin
-                if (`LINK) begin
-                    r[`LR] = r[`PC] + 3/*2 + 1*/;
-                end
-
-                r[`PC] = r[`RM];
+            if (`ZERO == 0 && 
+                `NOT_IN_ITB && 
+                `NOT_LAST_IN_ITB && 
+                !(`LINK && `RM == `PC)
+            ) begin
+                { i_serial } = `I_BL;
+                { m } = r[`RM];
+                { bl_req } = !bl_ack;
             end else begin
                 // ERROR
             end
-
-            `undef LINK
-            `undef RM
-            `undef CHECK
         end
 
         default: begin
             
         end
-    endcase
+    endcase    
+end
 
-    if (modify_state) begin
-        modify_state = 0;
-        nf = b[`REG_MSB];
-        zf = b == 0;
-        cf = tmp_cf;
-        vf = tmp_vf;
+always @(negedge sck) begin
+    if (modify_state_req != modify_state_ack) begin
+        modify_state_ack = modify_state_req;
+        nf = `CUR_TMP_DS[`REG_MSB];
+        zf = `CUR_TMP_DS == 0;
+        cf = `CUR_TMP_CF;
+        vf = `CUR_TMP_VF;
     end
 
+    if (`CAN_WRITE_DS) begin
+        `REG_DS = `CUR_TMP_DS;
+    end
+
+    if (`CAN_WRITE_ES) begin
+        `REG_ES = `CUR_TMP_ES;
+    end
 end endmodule
