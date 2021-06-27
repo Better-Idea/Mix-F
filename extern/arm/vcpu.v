@@ -2,6 +2,7 @@
 `timescale 1ns/1ps
 
 `define PC              4'd15
+`define LR              4'd14
 `define REG_MSB         31
 `define ALL_ONE         32'hffff_ffff
 `define ALL_ZERO        32'h0000_0000
@@ -299,6 +300,27 @@ always @(posedge sck) begin
             `undef IS_NOT_CMP
             `undef IS_MOV
             `undef IS_NOT_MOV
+        end
+
+        // TODO: if InITBlock() && !LastInITBlock()
+        8'b0100_0111: begin
+            `define LINK        (cmd[7])
+            `define RM          (cmd[6:3])
+            `define CHECK       (cmd[2:0])
+
+            if (`CHECK == 0 && `NOT_IN_ITB && !(`LINK && `RM == `PC)) begin
+                if (`LINK) begin
+                    r[`LR] = r[`PC] + 3/*2 + 1*/;
+                end
+
+                r[`PC] = r[`RM];
+            end else begin
+                // ERROR
+            end
+
+            `undef LINK
+            `undef RM
+            `undef CHECK
         end
 
         default: begin
