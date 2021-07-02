@@ -1,8 +1,9 @@
 // 目标：低功耗设计
 `timescale 1ns/1ps
 
-`define PC                  4'd15
+`define SP                  4'd13
 `define LR                  4'd14
+`define PC                  4'd15
 `define REG_MSB             31
 `define ALL_ONE             32'hffff_ffff
 `define ALL_ZERO            32'h0000_0000
@@ -62,7 +63,6 @@ reg [31:0] tmp_ds_mul    ;
 reg [31:0] tmp_ds_bitwise;
 reg [31:0] tmp_ds_mem    ;
 reg [31:0] tmp_ds_bl     ;
-
 reg [31:0] tmp_es_bl;
 
 reg tmp_cf_shift  , tmp_vf_shift  , msb_eq_shift  , tmp_zf_shift  , tmp_of_shift  ;
@@ -70,7 +70,7 @@ reg tmp_cf_add    , tmp_vf_add    , msb_eq_add    , tmp_zf_add    , tmp_of_add  
 reg tmp_cf_mul    , tmp_vf_mul    , msb_eq_mul    , tmp_zf_mul    , tmp_of_mul    ;
 reg tmp_cf_bitwise, tmp_vf_bitwise, msb_eq_bitwise, tmp_zf_bitwise, tmp_of_bitwise;
 reg tmp_cf_bl     , tmp_vf_bl     , msb_eq_bl     , tmp_zf_bl     , tmp_of_bl     ;
-reg tmp_cf_mem    , tmp_vf_mem    , msb_eq_mem    , tmp_zf_mem    , tmp_of_mem    ;
+// reg tmp_cf_mem    , tmp_vf_mem    , msb_eq_mem    , tmp_zf_mem    , tmp_of_mem    ;
 
 // 修改该标志位寄存器
 reg modify_state_req = 0;
@@ -79,11 +79,11 @@ reg modify_state_ack = 0;
 // i_serial 最大值不能超过 d 数组的索引
 reg [ 3:0] i_serial = 0;
 
-assign opt = d[i_serial];
-assign sta[31] = nf;
-assign sta[30] = zf;
-assign sta[29] = cf;
-assign sta[28] = vf;
+assign opt      = d[i_serial];
+assign sta[31]  = nf;
+assign sta[30]  = zf;
+assign sta[29]  = cf;
+assign sta[28]  = vf;
 
 assign d     [`I_SHIFT  ] = tmp_ds_shift  ;
 assign d     [`I_ADD    ] = tmp_ds_add    ;
@@ -215,14 +215,22 @@ reg mem_req                 = 0;
 reg mem_ack                 = 0;
 reg mem_mode                = 0;
 reg mem_is_signed           = 0;
+reg mem_multi_ls            = 0;
+reg mem_continue            = 0;
+reg [ 4:0] mem_buffer_i[0:7];
+reg [ 4:0] mem_i            = 0;
+reg [ 4:0] mem_end          = 0;
 reg [ 1:0] mem_scale        = 0;
 reg [31:0] mem_addr         = 0;
 
-`define MEM_MODE_READ       1'b0
-`define MEM_MODE_WRITE      1'b1
-`define MEM_SCALE_8BIT      2'b00
+// 和指令编码保持一致，load/store register offset 依赖此顺序
+`define MEM_MODE_WRITE      1'b0
+`define MEM_MODE_READ       1'b1
+
+// 和指令编码保持一致，load/store register offset 依赖此顺序
+`define MEM_SCALE_8BIT      2'b10
 `define MEM_SCALE_16BIT     2'b01
-`define MEM_SCALE_32BIT     2'b10
+`define MEM_SCALE_32BIT     2'b00
 
 always @(posedge (mem_req != mem_ack)) begin
     { mem_addr } = n + m;
@@ -248,7 +256,12 @@ always @(posedge sck) begin
     { reg_ds } = `NOT_WRITE_DS;
     { reg_es } = `NOT_WRITE_ES;
 
-    casez(cmd[15:8])
+    if (mem_continue) begin
+        { mem_i } = mem_i + 1;
+        { reg_ds } = mem_buffer_i[mem_i];
+        { m } = { mem_i, 2'b0 };
+        { mem_continue } = mem_i != mem_end;
+    end else casez(cmd[15:8])
         // 移位操作
         // mov PC, #imm 不更改状态位
         8'b000?_????: begin
@@ -290,8 +303,8 @@ always @(posedge sck) begin
             `define IS_CMP      (`MODE == 1)
             `define IS_NEG      (cmd[11])
             `define MODE        (cmd[12:11])
-            `define RD          (cmd[10:8])
             `define RN          (cmd[10:8])
+            `define RD          (cmd[10:8])
             `define IMM8        (cmd[7:0])
 
             { i_serial } = `I_ADD;
@@ -319,9 +332,9 @@ always @(posedge sck) begin
             `define IS_MUL      (cmd[9:6] == 4'b1101)
             `define IS_BIC      (cmd[9:6] == 4'b1110)
             `define IS_MVN      (cmd[9:6] == 4'b1111)
-            `define RD          (cmd[2:0])
-            `define RN          (cmd[2:0])
             `define RM          (cmd[5:3])
+            `define RN          (cmd[2:0])
+            `define RD          (cmd[2:0])
 
             if (`IS_AND || `IS_XOR || `IS_TST || `IS_ORR || `IS_BIC) begin
                 { i_serial } = `I_BITWISE;
@@ -367,9 +380,9 @@ always @(posedge sck) begin
         // ADD/CMP/MOV
         8'b0100_01??: begin
             `define MODE        (cmd[9:8])
-            `define RD          {cmd[7], cmd[2:0]}
-            `define RN          {cmd[7], cmd[2:0]}
             `define RM          (cmd[6:3])
+            `define RN          {cmd[7], cmd[2:0]}
+            `define RD          {cmd[7], cmd[2:0]}
             `define IS_CMP      (`MODE == 1)
             `define IS_MOV      (`MODE == 2)
 
@@ -402,12 +415,13 @@ always @(posedge sck) begin
             end
         end
 
-        // load from literal pool
+        // Load from literal pool
         8'b0100_1???: begin
             { i_serial } = `I_MEM;
             { mem_mode } = `MEM_MODE_READ;
             { mem_scale } = `MEM_SCALE_32BIT;
             { mem_is_signed } = 0;
+            { mem_multi_ls } = 0;
             { reg_ds } = cmd[10:8];
             // 确认一下 PC 是否需要对齐
             { n } = r[`PC];
@@ -415,12 +429,174 @@ always @(posedge sck) begin
             { mem_req } = !mem_ack;
         end
 
-        // load/store register offset
+        // Load/store register offset
         8'b0101_????: begin
+            `define MODE            (cmd[11:9])
+            `define SCALE           (cmd[10:9])
+            `define IS_SIGNED       (cmd[10:9] == 2'b11)
+            `define SIGNED_SCALE    {!cmd[11], cmd[11]}
+            `define RM              (cmd[ 8:6])
+            `define RN              (cmd[ 5:3])
+            `define RD              (cmd[ 2:0])
+
+            { i_serial } = `I_MEM;
+            
+            // 000: 32bit store
+            // 001: 16bit store
+            // 010: 08bit store
+            if (`MODE < 3) begin
+                { mem_mode } = `MEM_MODE_WRITE;
+                { mem_scale } = `SCALE;
+                { mem_is_signed } = 0;
+            // 011: 08bit load with sign
+            // 100: 32bit load
+            // 101: 16bit load
+            // 110: 08bit load
+            // 111: 16bit load with sign
+            end else begin
+                { mem_mode } = `MEM_MODE_READ;
+                { mem_scale } = `IS_SIGNED ? `SIGNED_SCALE : `SCALE;
+                { mem_is_signed } = `IS_SIGNED;
+            end
+
+            { reg_ds } = `RD;
+            { n } = r[`RN];
+            { m } = r[`RM];
+            { mem_req } = !mem_ack;
+        end
+
+        // 8'b011?_????: Load/store word/byte immediate offset
+        // 8'b1000_????: Load/store halfword immediate offset
+        8'b011?_????, 8'b1000_????: begin
+            `define B               (cmd[12])
+            `define L               (cmd[11])
+            `define IMM5            (cmd[10:6])
+            `define RN              (cmd[5:3])
+            `define RD              (cmd[2:0])
+
+            { i_serial } = `I_MEM;
+
+            // 0:store  -> 0:MEM_MODE_WRITE
+            // 1:load   -> 1:MEM_MODE_READ
+            { mem_mode } = `L;
+
+            // 00:32bit `B = 0
+            // 01:16bit `B = 0
+            // 10:08bit `B = 1
+            { mem_scale } = { `B, cmd[15] };
+            { mem_is_signed } = 0;
+
+            { reg_ds } = `RD;
+            { n } = r[`RN];
+            { m } = `IMM5;
+            { mem_req } = !mem_ack;
+        end
+
+        // Load from stack and store to stack instructions
+        8'b1001_????: begin
+            `define L               (cmd[11])
+            `define RD              (cmd[10:8])
+            `define IMM8            (cmd[7:0])
+
+            { i_serial } = `I_MEM;
+            { mem_mode } = `L;
+            { mem_scale } = `MEM_SCALE_32BIT;
+            { mem_is_signed } = 0;
+            { reg_ds } = `RD;
+            { n } = r[`SP];
+            { m } = { `IMM8, 2'b0 };
+            { mem_req } = !mem_ack;
+        end
+
+        // Add 8-bit immediate to SP or PC instructions
+        8'b1010_????: begin
+            `define IS_SP           (cmd[11])
+            `define IS_SET_FLAG     (cmd[11])
+            `define RD              (cmd[10:8])
+            `define IMM8            (cmd[7:0])
+
+            { i_serial } = `I_ADD;
+            { reg_ds } = `RD;
+            { n } = r[`IS_SP ? `SP : `PC];
+            { m } = { `IMM8, 2'b0 };
+            { add_with_cf } = 0;
+            { modify_state_req } = `IS_SET_FLAG ^ modify_state_req;
+            { add_req } = !add_ack;
+        end
+
+        // Miscellaneous instruction
+        // TODO:================================================================
+        8'b1011_????: begin
             
         end
 
-        // load/store word/byte immediate offset
+        // Load and store multiple
+        8'b1100_????: begin
+            `define L               (cmd[11])
+            `define RN              (cmd[10:8])
+            `define BMP_REG_LIST    (cmd[7:0])
+
+            // error
+            if (`BMP_REG_LIST == 0) begin
+            end else begin
+                casez (cmd[3:0])
+                4'b0001: begin mem_buffer_i[0] = 0; mem_end = 1; end
+                4'b0010: begin mem_buffer_i[0] = 1; mem_end = 1; end
+                4'b0011: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_end = 2; end
+                4'b0100: begin mem_buffer_i[0] = 2; mem_end = 1; end
+                4'b0101: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 2; mem_end = 2; end
+                4'b0110: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 2; mem_end = 2; end
+                4'b0111: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 2; mem_end = 3; end
+                4'b1000: begin mem_buffer_i[0] = 3; mem_end = 1; end
+                4'b1001: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 3; mem_end = 2; end
+                4'b1010: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 3; mem_end = 2;  end
+                4'b1011: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 3; mem_end = 3; end
+                4'b1100: begin mem_buffer_i[0] = 2; mem_buffer_i[1] = 3; mem_end = 2;  end
+                4'b1101: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 2; mem_buffer_i[2] = 3; mem_end = 3; end
+                4'b1110: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 2; mem_buffer_i[2] = 3; mem_end = 3; end
+                4'b1111: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 2; mem_buffer_i[3] = 3; mem_end = 4; end
+                default: begin mem_end = 0; end
+                endcase
+
+                casez (cmd[7:4])
+                4'b0001: begin mem_buffer_i[mem_end + 0] = 0; mem_end = mem_end + 1; end
+                4'b0010: begin mem_buffer_i[mem_end + 0] = 1; mem_end = mem_end + 1; end
+                4'b0011: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_end = mem_end + 2; end
+                4'b0100: begin mem_buffer_i[mem_end + 0] = 2; mem_end = mem_end + 1; end
+                4'b0101: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 2; mem_end = mem_end + 2; end
+                4'b0110: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 2; mem_end = mem_end + 2; end
+                4'b0111: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 2; mem_end = mem_end + 3; end
+                4'b1000: begin mem_buffer_i[mem_end + 0] = 3; mem_end = mem_end + 1; end
+                4'b1001: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2; end
+                4'b1010: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2;  end
+                4'b1011: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
+                4'b1100: begin mem_buffer_i[mem_end + 0] = 2; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2;  end
+                4'b1101: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 2; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
+                4'b1110: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 2; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
+                4'b1111: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 2; mem_buffer_i[mem_end + 3] = 3; mem_end = mem_end + 4; end
+                default: begin mem_end = 0; end
+                endcase
+
+                { i_serial } = `I_MEM;
+                { mem_mode } = `L;
+                { mem_scale } = `MEM_SCALE_32BIT;
+                { mem_is_signed } = 0;
+                { reg_ds } = mem_buffer_i[0];
+                { mem_i } = 1;
+                { mem_continue } = mem_i != mem_end;
+                { mem_req } = !mem_ack;
+            end
+        end
+
+        // Undefined instruction
+        8'b1101_1110: begin
+            
+        end
+
+        // System call
+        8'b1101_1111: begin
+            
+        end
 
         default: begin
             
