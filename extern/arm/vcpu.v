@@ -215,7 +215,6 @@ reg mem_req                 = 0;
 reg mem_ack                 = 0;
 reg mem_mode                = 0;
 reg mem_is_signed           = 0;
-reg mem_multi_ls            = 0;
 reg mem_continue            = 0;
 reg [ 4:0] mem_buffer_i[0:7];
 reg [ 4:0] mem_i            = 0;
@@ -574,7 +573,7 @@ always @(posedge sck) begin
                 4'b1101: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 2; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
                 4'b1110: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 2; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
                 4'b1111: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 2; mem_buffer_i[mem_end + 3] = 3; mem_end = mem_end + 4; end
-                default: begin mem_end = 0; end
+                default: begin end
                 endcase
 
                 { i_serial } = `I_MEM;
