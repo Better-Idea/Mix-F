@@ -7,6 +7,7 @@
 `define REG_MSB             31
 `define ALL_ONE             32'hffff_ffff
 `define ALL_ZERO            32'h0000_0000
+`define IN_ITB              (in_it_block)
 `define NOT_IN_ITB          (!in_it_block)
 `define NOT_LAST_IN_ITB     (!last_in_it_block)
 `define SYS_BITS            32
@@ -40,12 +41,15 @@ module vcpu(
 
 // public
 reg [31:0] r[0:15];
+reg [31:0] base_svc_table;
 reg in_it_block;
 reg last_in_it_block;
 reg cf;
 reg zf;
 reg nf;
 reg vf;
+reg tmp_make_jmp;
+reg tmp_error;
 
 // private
 wire[31:0] d[`B_LOW:`I_MAX];    // 目的寄存器
@@ -284,6 +288,7 @@ always @(posedge sck or posedge rst) begin
     { reg_es } = `NOT_WRITE_ES;
 
     if (rst) begin
+        { base_svc_table } = 0;
         { in_it_block } = 0;
         { last_in_it_block } = 0;
 
@@ -649,13 +654,70 @@ always @(posedge sck or posedge rst) begin
             end
         end
 
-        // Undefined instruction
-        8'b1101_1110: begin
+        // Jump
+        8'b1101_????: begin
+            `define EQ          (3'b000)
+            `define CF          (3'b001)
+            `define NF          (3'b010)
+            `define VF          (3'b011)
+            `define CFZ         (3'b100)
+            `define GE          (3'b101)
+            `define GT          (3'b110)
+            `define NOT         (cmd[8])
+            `define LIMIT       (cmd[8] == 0)
+            `define IMM8        (cmd[7:0])
+            `define SVC         (4'b1111)
+
+            if (cmd[11:8] == `SVC) begin
+                { i_serial } = `I_MEM;
+                { mem_mode } = `MEM_MODE_READ;
+                { mem_scale } = `MEM_SCALE_32BIT;
+                { mem_is_signed } = 0;
+                { reg_ds } = `PC;
+                { n } = base_svc_table;
+                { m } = { `IMM8, 2'b0 }; // TODO:确认中断流程===========================
+                { mem_req } = !mem_ack;
+            end else begin
+                { i_serial } = `I_ADD;
+                { reg_ds } = `PC;
+                { n } = r[`PC];
+                { m } = `IMM8;
+                { add_with_cf } = 0;
+
+                casez(cmd[11:9])
+                `EQ :    begin tmp_make_jmp = (`NOT) ^ zf; end
+                `CF :    begin tmp_make_jmp = (`NOT) ^ cf; end
+                `NF :    begin tmp_make_jmp = (`NOT) ^ nf; end
+                `VF :    begin tmp_make_jmp = (`NOT) ^ vf; end
+                `CFZ:    begin tmp_make_jmp = (`NOT ^ !zf) & cf; end
+                `GE :    begin tmp_make_jmp = (`NOT) ^ (nf == vf); end
+                `GT :    begin tmp_make_jmp = (`NOT) ^ ((!zf & nf & vf) | (!nf & !vf)); end
+                // Undefined instruction
+                default: begin tmp_make_jmp = 0; tmp_error = 1; end
+                endcase
+
+                { add_req } = tmp_make_jmp ^ add_ack;
+            end
+        end
+
+        8'b1110_0???: begin
+            `define IMM11       (cmd[10:0])
+
+            { i_serial } = `I_ADD;
+            { reg_ds } = `PC;
+            { n } = r[`PC];
+            { m } = `IMM11;
+            { add_with_cf } = 0;
+            { add_req } = !add_ack;
+        end
+
+        // 32bit instruction
+        8'b1110_1???: begin
             
         end
 
-        // System call
-        8'b1101_1111: begin
+        // 32bit instruction
+        8'b1111_????: begin
             
         end
 
