@@ -31,6 +31,7 @@
 `define I_MAX               15 /*当 I_MAX 需要变大时需要修改下方 d 的元素个数*/
 
 module vcpu(
+    input           rst,
     input           sck,
     input  [15:0]   cmd,
     output [31:0]   opt,
@@ -39,12 +40,12 @@ module vcpu(
 
 // public
 reg [31:0] r[0:15];
-reg in_it_block = 0;
-reg last_in_it_block = 0;
-reg cf = 0;
-reg zf = 0;
-reg nf = 0;
-reg vf = 0;
+reg in_it_block;
+reg last_in_it_block;
+reg cf;
+reg zf;
+reg nf;
+reg vf;
 
 // private
 wire[31:0] d[`B_LOW:`I_MAX];    // 目的寄存器
@@ -116,57 +117,71 @@ assign tmp_cf[`I_BL     ] = tmp_cf_bl     , tmp_vf[`I_BL     ] = tmp_vf_bl     ,
 `define SHIFT_LEFT          1'b0
 `define SHIFT_RIGHT         1'b1
 
-reg [31:0]  shift_temp      = 0;
-reg [5:0]   shift_bits      = 0;
-reg         shift_direction = 0;    // 0 : left / 1 : right
-reg         shift_with_sign = 0;    // 带符号移位，只对右移有效
-reg         shift_with_loop = 0;    // 循环移位，只对右移有效
-reg         shift_req       = 0;
-reg         shift_ack       = 0;
+reg [31:0]  shift_temp;
+reg [5:0]   shift_bits;
+reg         shift_direction;    // 0 : left / 1 : right
+reg         shift_with_sign;    // 带符号移位，只对右移有效
+reg         shift_with_loop;    // 循环移位，只对右移有效
+reg         shift_req;
+reg         shift_ack;
 
-always @(posedge (shift_req != shift_ack)) begin
-    shift_bits = m[7:0] > `SYS_BITS ? `SYS_BITS_PLUS1 : m[5:0];
+always @(posedge (shift_req != shift_ack) or posedge rst) begin
+    if (rst) begin
+        { shift_temp } = 0;
+        { shift_bits } = 0;
+        { shift_ack } = 0;
+    end else begin
+        { shift_bits } = m[7:0] > `SYS_BITS ? `SYS_BITS_PLUS1 : m[5:0];
 
-    if (shift_direction == `SHIFT_LEFT) begin // 左移
-        { tmp_cf_shift, tmp_ds_shift } = { cf, n } << shift_bits;
-    end else begin // 右移
-        { tmp_ds_shift, shift_temp } = {
-            { `SYS_BITS_PLUS1{ shift_with_sign && n[`REG_MSB] } }, n, `ALL_ZERO
-        } >> (shift_with_loop ? { 1'b0, m[4:0] } : { shift_bits });
+        if (shift_direction == `SHIFT_LEFT) begin // 左移
+            { tmp_cf_shift, tmp_ds_shift } = { cf, n } << shift_bits;
+        end else begin // 右移
+            { tmp_ds_shift, shift_temp } = {
+                { `SYS_BITS_PLUS1{ shift_with_sign && n[`REG_MSB] } }, n, `ALL_ZERO
+            } >> (shift_with_loop ? { 1'b0, m[4:0] } : { shift_bits });
 
-        { tmp_ds_shift } = shift_temp[`REG_MSB];
+            { tmp_ds_shift } = shift_temp[`REG_MSB];
 
-        if (shift_with_loop) begin
-            tmp_ds_shift = tmp_ds_shift | shift_temp;
+            if (shift_with_loop) begin
+                { tmp_ds_shift } = tmp_ds_shift | shift_temp;
+            end
         end
-    end
 
-    // 不更改 vf
-    { tmp_vf_shift } = vf;
-    { shift_ack } = shift_req;
+        // 不更改 vf
+        { tmp_vf_shift } = vf;
+        { shift_ack } = shift_req;
+    end
 end
 
 // 加法操作 ========================================
-reg add_with_cf             = 0;
-reg add_req                 = 0;
-reg add_ack                 = 0;
+reg add_with_cf;
+reg add_req;
+reg add_ack;
 
-always @(posedge (add_req != add_ack)) begin
-    { msb_eq_add } = n[`REG_MSB] == m[`REG_MSB];
-    { tmp_cf_add, tmp_ds_add } = n + m + add_with_cf;
-    { tmp_vf_add } = msb_eq_add ? n[`REG_MSB] != tmp_ds_add[`REG_MSB] : 0;
-    { add_ack } = add_req;
+always @(posedge (add_req != add_ack) or posedge rst) begin
+    if (rst) begin
+        { add_ack } = 0;
+    end else begin
+        { msb_eq_add } = n[`REG_MSB] == m[`REG_MSB];
+        { tmp_cf_add, tmp_ds_add } = n + m + add_with_cf;
+        { tmp_vf_add } = msb_eq_add ? n[`REG_MSB] != tmp_ds_add[`REG_MSB] : 0;
+        { add_ack } = add_req;
+    end
 end
 
 // 乘法操作 ========================================
-reg mul_req                 = 0;
-reg mul_ack                 = 0;
+reg mul_req;
+reg mul_ack;
 
-always @(posedge (mul_req != mul_ack)) begin
-    { tmp_ds_mul } = n * m;
-    { tmp_cf_mul } = cf;
-    { tmp_vf_mul } = vf;
-    { mul_ack } = mul_req;
+always @(posedge (mul_req != mul_ack) or posedge rst) begin
+    if (rst) begin
+        { mul_ack } = 0;
+    end else begin
+        { tmp_ds_mul } = n * m;
+        { tmp_cf_mul } = cf;
+        { tmp_vf_mul } = vf;
+        { mul_ack } = mul_req;
+    end
 end
 
 // 按位操作 ========================================
@@ -183,31 +198,39 @@ end
 // or      A | B                0   1
 // xor     A ^ B                1   0
 // nand  ~(A & B) -> ~A | ~B    1   1
-reg bitwise_m0              = 0;
-reg bitwise_m1              = 0;
-reg bitwise_req             = 0;
-reg bitwise_ack             = 0;
+reg bitwise_m0;
+reg bitwise_m1;
+reg bitwise_req;
+reg bitwise_ack;
 
-always @(posedge (bitwise_req != bitwise_ack)) begin
-    { tmp_ds_bitwise } =
-        ((bitwise_m1 ? ~n       : n) & (bitwise_m0 ? `ALL_ONE : m)) | 
-        ((bitwise_m0 ? `ALL_ONE : n) & (bitwise_m1 ? ~m       : m));
-    { tmp_vf_bitwise } = vf;
-    { bitwise_ack } = bitwise_req;
+always @(posedge (bitwise_req != bitwise_ack) or posedge rst) begin
+    if (rst) begin
+        { bitwise_ack } = 0;
+    end else begin
+        { tmp_ds_bitwise } =
+            ((bitwise_m1 ? ~n       : n) & (bitwise_m0 ? `ALL_ONE : m)) | 
+            ((bitwise_m0 ? `ALL_ONE : n) & (bitwise_m1 ? ~m       : m));
+        { tmp_vf_bitwise } = vf;
+        { bitwise_ack } = bitwise_req;
+    end
 end
 
 // 转移指令
-reg bl_req                  = 0;
-reg bl_ack                  = 0;
-reg bl_with_link            = 0;
+reg bl_req;
+reg bl_ack;
+reg bl_with_link;
 
-always @(posedge (bl_req != bl_ack)) begin
-    if (bl_with_link) begin
-        { tmp_es_bl } = r[`PC] + 3/*2 + 1*/;
+always @(posedge (bl_req != bl_ack) or posedge rst) begin
+    if (rst) begin
+        { bl_ack } = 0;
+    end else begin
+        if (bl_with_link) begin
+            { tmp_es_bl } = r[`PC] + 3/*2 + 1*/;
+        end
+
+        { tmp_ds_bl } = m;
+        { bl_ack } = bl_req;
     end
-
-    { tmp_ds_bl } = m;
-    { bl_ack } = bl_req;
 end
 
 // 内存加载指令
@@ -231,31 +254,71 @@ reg [31:0] mem_addr         = 0;
 `define MEM_SCALE_16BIT     2'b01
 `define MEM_SCALE_32BIT     2'b00
 
-always @(posedge (mem_req != mem_ack)) begin
-    { mem_addr } = n + m;
-    { tmp_ds_mem } = mem_addr; // TODO：内存访问模块
+always @(posedge (mem_req != mem_ack) or posedge rst) begin
+    if (rst) begin
+        { mem_ack } = 0;
+        { mem_addr } = 0;
+    end else begin
+        { mem_addr } = n + m;
+        { tmp_ds_mem } = mem_addr; // TODO：内存访问模块
 
-    if (mem_is_signed && mem_mode == `MEM_MODE_READ) begin
-        casez(mem_scale)
-        `MEM_SCALE_8BIT : begin
-            tmp_ds_mem = { { `SYS_BITS_SUB8 {tmp_ds_mem[ 7]} }, tmp_ds_mem[ 7:0] };
+        if (mem_is_signed && mem_mode == `MEM_MODE_READ) begin
+            casez(mem_scale)
+            `MEM_SCALE_8BIT : begin
+                tmp_ds_mem = { { `SYS_BITS_SUB8 {tmp_ds_mem[ 7]} }, tmp_ds_mem[ 7:0] };
+            end
+            `MEM_SCALE_16BIT: begin
+                tmp_ds_mem = { { `SYS_BITS_SUB16{tmp_ds_mem[15]} }, tmp_ds_mem[15:0] };
+            end
+            endcase
         end
-        `MEM_SCALE_16BIT: begin
-            tmp_ds_mem = { { `SYS_BITS_SUB16{tmp_ds_mem[15]} }, tmp_ds_mem[15:0] };
-        end
-        endcase
+
+        { mem_ack } = mem_req;
     end
-
-    { mem_ack } = !mem_req;
 end
 
-always @(posedge sck) begin
+always @(posedge sck or posedge rst) begin
     // 大部分指令只有一个目的寄存器
     // 一般只要写入 DS 对应的寄存器就好了
     { reg_ds } = `NOT_WRITE_DS;
     { reg_es } = `NOT_WRITE_ES;
 
-    if (mem_continue) begin
+    if (rst) begin
+        { in_it_block } = 0;
+        { last_in_it_block } = 0;
+
+        { shift_direction } = 0;
+        { shift_with_sign } = 0;
+        { shift_with_loop } = 0;
+        { shift_req } = 0;
+
+        { add_with_cf } = 0;
+
+        { mul_req } = 0;
+
+        { bitwise_m0 } = 0;
+        { bitwise_m1 } = 0;
+        { bitwise_req } = 0;
+
+        { bl_req } = 0;
+        { bl_with_link } = 0;
+
+        { mem_req } = 0;
+        { mem_mode } = 0;
+        { mem_is_signed } = 0;
+        { mem_continue } = 0;
+        { mem_buffer_i[0] } = 0;
+        { mem_buffer_i[1] } = 0;
+        { mem_buffer_i[2] } = 0;
+        { mem_buffer_i[3] } = 0;
+        { mem_buffer_i[4] } = 0;
+        { mem_buffer_i[5] } = 0;
+        { mem_buffer_i[6] } = 0;
+        { mem_buffer_i[7] } = 0;
+        { mem_i } = 0;
+        { mem_end } = 0;
+        { mem_scale } = 0;
+    end else if (mem_continue) begin
         { mem_i } = mem_i + 1;
         { reg_ds } = mem_buffer_i[mem_i];
         { m } = { mem_i, 2'b0 };
@@ -420,7 +483,6 @@ always @(posedge sck) begin
             { mem_mode } = `MEM_MODE_READ;
             { mem_scale } = `MEM_SCALE_32BIT;
             { mem_is_signed } = 0;
-            { mem_multi_ls } = 0;
             { reg_ds } = cmd[10:8];
             // 确认一下 PC 是否需要对齐
             { n } = r[`PC];
@@ -603,20 +665,40 @@ always @(posedge sck) begin
     endcase
 end
 
-always @(negedge sck) begin
-    if (modify_state_req != modify_state_ack) begin
-        modify_state_ack = modify_state_req;
-        nf = `CUR_TMP_DS[`REG_MSB];
-        zf = `CUR_TMP_DS == 0;
-        cf = `CUR_TMP_CF;
-        vf = `CUR_TMP_VF;
-    end
+always @(negedge sck or posedge rst) begin
+    if (rst) begin
+        { r[4'h0] } = 0;
+        { r[4'h1] } = 0;
+        { r[4'h2] } = 0;
+        { r[4'h3] } = 0;
+        { r[4'h4] } = 0;
+        { r[4'h5] } = 0;
+        { r[4'h6] } = 0;
+        { r[4'h7] } = 0;
+        { r[4'h8] } = 0;
+        { r[4'h9] } = 0;
+        { r[4'ha] } = 0;
+        { r[4'hb] } = 0;
+        { r[4'hc] } = 0;
+        { r[4'hd] } = 0;
+        { r[4'he] } = 0;
+        { r[4'hf] } = 0;
+        { cf, zf, nf, vf } = 0;
+    end else begin
+        if (modify_state_req != modify_state_ack) begin
+            modify_state_ack = modify_state_req;
+            nf = `CUR_TMP_DS[`REG_MSB];
+            zf = `CUR_TMP_DS == 0;
+            cf = `CUR_TMP_CF;
+            vf = `CUR_TMP_VF;
+        end
 
-    if (`CAN_WRITE_DS) begin
-        `REG_DS = `CUR_TMP_DS;
-    end
+        if (`CAN_WRITE_DS) begin
+            `REG_DS = `CUR_TMP_DS;
+        end
 
-    if (`CAN_WRITE_ES) begin
-        `REG_ES = `CUR_TMP_ES;
+        if (`CAN_WRITE_ES) begin
+            `REG_ES = `CUR_TMP_ES;
+        end
     end
 end endmodule
