@@ -39,11 +39,6 @@ module vcpu(
     output [31:0]   sta
 );
 
-dist_mem_gen_0 rom(
-    .a(cmd[9:0]),
-    .spo(opt)
-);
-
 // public
 reg [31:0] r[0:15];
 reg [31:0] base_svc_table;
@@ -333,6 +328,7 @@ always @(posedge sck or posedge rst) begin
         { reg_ds } = mem_buffer_i[mem_i];
         { m } = { mem_i, 2'b0 };
         { mem_continue } = mem_i != mem_end;
+        { mem_req } = !mem_ack;
     end else casez(cmd[15:8])
         // 移位操作
         // mov PC, #imm 不更改状态位
@@ -480,6 +476,7 @@ always @(posedge sck or posedge rst) begin
                 !(`LINK && `RM == `PC)
             ) begin
                 { i_serial } = `I_BL;
+                { reg_ds } = `PC;
                 { m } = r[`RM];
                 { bl_req } = !bl_ack;
             end else begin
@@ -622,9 +619,32 @@ always @(posedge sck or posedge rst) begin
 
                 { i_serial } = `I_BITWISE;
                 { reg_ds } = `RD;
-                { n } = r[`RM][15:0] & { {8{ !`IS_BYTE }} , 8'hff };
-                { m } = { `SYS_BITS{ `SIGN_EXTERN & r[`RM][`IS_BYTE ? 7 : 15] }} << { `IS_BYTE ? 8 : 16 };
+                { bitwise_m0 } = 1;
+                { bitwise_m1 } = 0;
+                { n } = { r[`RM][15:8] & {8{ !`IS_BYTE }}, r[`RM][7:0] };
+                { m } = { `SYS_BITS{ `SIGN_EXTERN & r[`RM][`IS_BYTE ? 7 : 15] }} + (`IS_BYTE ? 5'd8 : 5'd16);
+                // { modify_state_req } = modify_state_req; // 不改变状态位
                 { bitwise_req } = !bitwise_ack;
+            end
+
+            // Compare and Branch on (Non-)Zero
+            4'b?0?1: begin
+                `define NON_ZERO    (cmd[11])
+                `define IMM6        {cmd[9], cmd[7:3]}
+                `define RN          (cmd[2:0])
+
+                { i_serial } = `I_ADD;
+                { reg_ds } = `PC;
+                { n } = r[`PC];
+                { m } = { `IMM6, 1'b0 }; // 2 字节对齐
+                { add_with_cf } = 0;
+                // { modify_state_req } = modify_state_req; // 不改变状态位
+                { add_req } = (`ZERO) ^ (r[`RN] == 0) ? !add_ack : add_ack;
+            end
+
+            // Push/pop register list
+            4'b?10?: begin
+                
             end
 
             default: begin
@@ -685,6 +705,8 @@ always @(posedge sck or posedge rst) begin
                 { mem_scale } = `MEM_SCALE_32BIT;
                 { mem_is_signed } = 0;
                 { reg_ds } = mem_buffer_i[0];
+                { n } = r[`RN];
+                { m } = 0;
                 { mem_i } = 1;
                 { mem_continue } = mem_i != mem_end;
                 { mem_req } = !mem_ack;
