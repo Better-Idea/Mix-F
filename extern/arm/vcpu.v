@@ -42,12 +42,12 @@ module vcpu(
 // public
 reg [31:0] r[0:15];
 reg [31:0] base_svc_table;
-reg in_it_block;
-reg last_in_it_block;
-reg cf;
-reg zf;
-reg nf;
-reg vf;
+reg        in_it_block;
+reg        last_in_it_block;
+reg        cf;
+reg        zf;
+reg        nf;
+reg        vf;
 
 reg [ 7:0] multi_list;
 reg        multi_list_lr;
@@ -123,6 +123,17 @@ assign tmp_cf[`I_BL     ] = tmp_cf_bl     , tmp_vf[`I_BL     ] = tmp_vf_bl     ,
 `define CUR_TMP_DS          d[i_serial]
 `define CUR_TMP_ES          e[i_serial]
 
+reg        reset_req = 0;
+reg        reset_ack = 0;
+reg        reset = 0;
+
+always @(posedge rst) begin
+    // 不允许在复位为完成时再发起复位信号
+    if (reset_req == reset_ack) begin
+        reset_req = !reset_ack;
+    end
+end
+
 // 移位操作 ========================================
 `define SHIFT_LEFT          1'b0
 `define SHIFT_RIGHT         1'b1
@@ -135,8 +146,8 @@ reg         shift_with_loop;    // 循环移位，只对右移有效
 reg         shift_req;
 reg         shift_ack;
 
-always @(posedge (shift_req != shift_ack) or posedge rst) begin
-    if (rst) begin
+always @(posedge (shift_req != shift_ack) or posedge reset) begin
+    if (reset) begin
         { shift_temp } = 0;
         { shift_bits } = 0;
         { shift_ack } = 0;
@@ -168,8 +179,8 @@ reg add_with_cf;
 reg add_req;
 reg add_ack;
 
-always @(posedge (add_req != add_ack) or posedge rst) begin
-    if (rst) begin
+always @(posedge (add_req != add_ack) or posedge reset) begin
+    if (reset) begin
         { add_ack } = 0;
     end else begin
         { msb_eq_add } = n[`REG_MSB] == m[`REG_MSB];
@@ -183,8 +194,8 @@ end
 reg mul_req;
 reg mul_ack;
 
-always @(posedge (mul_req != mul_ack) or posedge rst) begin
-    if (rst) begin
+always @(posedge (mul_req != mul_ack) or posedge reset) begin
+    if (reset) begin
         { mul_ack } = 0;
     end else begin
         { tmp_ds_mul } = n * m;
@@ -213,8 +224,8 @@ reg bitwise_m1;
 reg bitwise_req;
 reg bitwise_ack;
 
-always @(posedge (bitwise_req != bitwise_ack) or posedge rst) begin
-    if (rst) begin
+always @(posedge (bitwise_req != bitwise_ack) or posedge reset) begin
+    if (reset) begin
         { bitwise_ack } = 0;
     end else begin
         { tmp_ds_bitwise } =
@@ -230,8 +241,8 @@ reg bl_req;
 reg bl_ack;
 reg bl_with_link;
 
-always @(posedge (bl_req != bl_ack) or posedge rst) begin
-    if (rst) begin
+always @(posedge (bl_req != bl_ack) or posedge reset) begin
+    if (reset) begin
         { bl_ack } = 0;
     end else begin
         if (bl_with_link) begin
@@ -264,8 +275,8 @@ reg [31:0] mem_addr         = 0;
 `define MEM_SCALE_16BIT     2'b01
 `define MEM_SCALE_32BIT     2'b00
 
-always @(posedge (mem_req != mem_ack) or posedge rst) begin
-    if (rst) begin
+always @(posedge (mem_req != mem_ack) or posedge reset) begin
+    if (reset) begin
         { mem_ack } = 0;
         { mem_addr } = 0;
     end else begin
@@ -287,16 +298,19 @@ always @(posedge (mem_req != mem_ack) or posedge rst) begin
     end
 end
 
-always @(posedge sck or posedge rst) begin
+always @(posedge sck) begin
     // 大部分指令只有一个目的寄存器
     // 一般只要写入 DS 对应的寄存器就好了
     { reg_ds } = `NOT_WRITE_DS;
     { reg_es } = `NOT_WRITE_ES;
+    { reset } = 0;
 
-    if (rst) begin
+    if (reset_req != reset_ack) begin
+        { reset } = 1;
         { base_svc_table } = 0;
         { in_it_block } = 0;
         { last_in_it_block } = 0;
+        { multi_access } = 0;
 
         { shift_direction } = 0;
         { shift_with_sign } = 0;
@@ -330,8 +344,9 @@ always @(posedge sck or posedge rst) begin
         { mem_end } = 0;
         { mem_scale } = 0;
     end else if (mem_continue) begin
-        { mem_i } = mem_i + 1;
+        // 先读取后 mem_i + 1
         { reg_ds } = mem_buffer_i[mem_i];
+        { mem_i } = mem_i + 1;
         { m } = { mem_i, 2'b0 };
         { mem_continue } = mem_i != mem_end;
         { mem_req } = !mem_ack;
@@ -827,8 +842,9 @@ always @(posedge sck or posedge rst) begin
     end
 end
 
-always @(negedge sck or posedge rst) begin
-    if (rst) begin
+always @(negedge sck) begin
+    if (reset_req != reset_ack) begin
+        { reset_ack } = reset_req;
         { r[4'h0] } = 0;
         { r[4'h1] } = 0;
         { r[4'h2] } = 0;
