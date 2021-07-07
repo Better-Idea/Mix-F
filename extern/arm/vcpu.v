@@ -39,6 +39,11 @@ module vcpu(
     output [31:0]   sta
 );
 
+dist_mem_gen_0 rom(
+    .a(cmd[9:0]),
+    .spo(opt)
+);
+
 // public
 reg [31:0] r[0:15];
 reg [31:0] base_svc_table;
@@ -84,7 +89,7 @@ reg modify_state_ack = 0;
 // i_serial 最大值不能超过 d 数组的索引
 reg [ 3:0] i_serial = 0;
 
-assign opt      = d[i_serial];
+// assign opt      = d[i_serial];
 assign sta[31]  = nf;
 assign sta[30]  = zf;
 assign sta[29]  = cf;
@@ -593,7 +598,39 @@ always @(posedge sck or posedge rst) begin
         // Miscellaneous instruction
         // TODO:================================================================
         8'b1011_????: begin
-            
+            casez (cmd[11:8])
+            // Adjust stack pointer
+            4'b0000: begin
+                `define IS_SUB      (cmd[7])
+                `define IMM7        (cmd[6:0])
+
+                { i_serial } = `I_ADD;
+                { reg_ds } = `SP;
+                { n } = r[`SP];
+                { m } = { `IMM7, 2'b0 } ^ { `SYS_BITS{ `IS_SUB } };
+                { add_with_cf } = `IS_SUB;
+                // { modify_state_req } = modify_state_req; // 不改变状态位
+                { add_req } = !add_ack;
+            end
+
+            //  Sign or zero extend instructions
+            4'b0010: begin
+                `define RD          (cmd[2:0])
+                `define RM          (cmd[5:3])
+                `define SIGN_EXTERN (cmd[7])
+                `define IS_BYTE     (cmd[6])
+
+                { i_serial } = `I_BITWISE;
+                { reg_ds } = `RD;
+                { n } = r[`RM][15:0] & { {8{ !`IS_BYTE }} , 8'hff };
+                { m } = { `SYS_BITS{ `SIGN_EXTERN & r[`RM][`IS_BYTE ? 7 : 15] }} << { `IS_BYTE ? 8 : 16 };
+                { bitwise_req } = !bitwise_ack;
+            end
+
+            default: begin
+                
+            end
+            endcase 
         end
 
         // Load and store multiple
