@@ -48,8 +48,14 @@ reg cf;
 reg zf;
 reg nf;
 reg vf;
-reg tmp_make_jmp;
-reg tmp_error;
+
+reg [ 7:0] multi_list;
+reg        multi_list_lr;
+reg        multi_list_adjust_base; // 基址 - 待保存寄存器数 * 4
+reg        multi_list_adjust_by_add;
+reg        multi_access;
+reg        tmp_make_jmp;
+reg        tmp_error;
 
 // private
 wire[31:0] d[`B_LOW:`I_MAX];    // 目的寄存器
@@ -243,7 +249,7 @@ reg mem_ack                 = 0;
 reg mem_mode                = 0;
 reg mem_is_signed           = 0;
 reg mem_continue            = 0;
-reg [ 4:0] mem_buffer_i[0:7];
+reg [ 4:0] mem_buffer_i[0:15];
 reg [ 4:0] mem_i            = 0;
 reg [ 4:0] mem_end          = 0;
 reg [ 1:0] mem_scale        = 0;
@@ -644,7 +650,20 @@ always @(posedge sck or posedge rst) begin
 
             // Push/pop register list
             4'b?10?: begin
-                
+                `define IS_POP          (cmd[11])
+
+                // 不要使用 `define LR 会和全局定义冲突
+                `define ADDTION_LR      (cmd[8])
+                `define BMP_REG_LIST    (cmd[7:0])
+
+                { mem_mode } = `IS_POP;
+                { n } = r[`SP];
+
+                { multi_list } = `BMP_REG_LIST;
+                { multi_list_lr } = `ADDTION_LR; // 按需保存或加载 LR 寄存器
+                { multi_list_adjust_base } = 1;
+                { multi_list_adjust_by_add } = `IS_POP;
+                { multi_access } = 1;
             end
 
             default: begin
@@ -659,58 +678,14 @@ always @(posedge sck or posedge rst) begin
             `define RN              (cmd[10:8])
             `define BMP_REG_LIST    (cmd[7:0])
 
-            // error
-            if (`BMP_REG_LIST == 0) begin
-            end else begin
-                casez (cmd[3:0])
-                4'b0001: begin mem_buffer_i[0] = 0; mem_end = 1; end
-                4'b0010: begin mem_buffer_i[0] = 1; mem_end = 1; end
-                4'b0011: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_end = 2; end
-                4'b0100: begin mem_buffer_i[0] = 2; mem_end = 1; end
-                4'b0101: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 2; mem_end = 2; end
-                4'b0110: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 2; mem_end = 2; end
-                4'b0111: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 2; mem_end = 3; end
-                4'b1000: begin mem_buffer_i[0] = 3; mem_end = 1; end
-                4'b1001: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 3; mem_end = 2; end
-                4'b1010: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 3; mem_end = 2;  end
-                4'b1011: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 3; mem_end = 3; end
-                4'b1100: begin mem_buffer_i[0] = 2; mem_buffer_i[1] = 3; mem_end = 2;  end
-                4'b1101: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 2; mem_buffer_i[2] = 3; mem_end = 3; end
-                4'b1110: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 2; mem_buffer_i[2] = 3; mem_end = 3; end
-                4'b1111: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 2; mem_buffer_i[3] = 3; mem_end = 4; end
-                default: begin mem_end = 0; end
-                endcase
+            { mem_mode } = `L;
+            { n } = r[`RN];
 
-                casez (cmd[7:4])
-                4'b0001: begin mem_buffer_i[mem_end + 0] = 0; mem_end = mem_end + 1; end
-                4'b0010: begin mem_buffer_i[mem_end + 0] = 1; mem_end = mem_end + 1; end
-                4'b0011: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_end = mem_end + 2; end
-                4'b0100: begin mem_buffer_i[mem_end + 0] = 2; mem_end = mem_end + 1; end
-                4'b0101: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 2; mem_end = mem_end + 2; end
-                4'b0110: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 2; mem_end = mem_end + 2; end
-                4'b0111: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 2; mem_end = mem_end + 3; end
-                4'b1000: begin mem_buffer_i[mem_end + 0] = 3; mem_end = mem_end + 1; end
-                4'b1001: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2; end
-                4'b1010: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2;  end
-                4'b1011: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
-                4'b1100: begin mem_buffer_i[mem_end + 0] = 2; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2;  end
-                4'b1101: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 2; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
-                4'b1110: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 2; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
-                4'b1111: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 2; mem_buffer_i[mem_end + 3] = 3; mem_end = mem_end + 4; end
-                default: begin end
-                endcase
-
-                { i_serial } = `I_MEM;
-                { mem_mode } = `L;
-                { mem_scale } = `MEM_SCALE_32BIT;
-                { mem_is_signed } = 0;
-                { reg_ds } = mem_buffer_i[0];
-                { n } = r[`RN];
-                { m } = 0;
-                { mem_i } = 1;
-                { mem_continue } = mem_i != mem_end;
-                { mem_req } = !mem_ack;
-            end
+            { multi_list } = `BMP_REG_LIST;
+            { multi_list_lr } = 0; // LR 寄存器无需操作
+            { multi_list_adjust_base } = 0;
+            // { multi_list_adjust_by_sub } = 0;
+            { multi_access } = 1;
         end
 
         // Jump
@@ -784,6 +759,72 @@ always @(posedge sck or posedge rst) begin
             
         end
     endcase
+
+    if (multi_access) begin
+        multi_access = 0;
+
+        // ERROR
+        if (multi_list == 0) begin
+        end else begin
+            casez (multi_list[3:0])
+            4'b0001: begin mem_buffer_i[0] = 0; mem_end = 1; end
+            4'b0010: begin mem_buffer_i[0] = 1; mem_end = 1; end
+            4'b0011: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_end = 2; end
+            4'b0100: begin mem_buffer_i[0] = 2; mem_end = 1; end
+            4'b0101: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 2; mem_end = 2; end
+            4'b0110: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 2; mem_end = 2; end
+            4'b0111: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 2; mem_end = 3; end
+            4'b1000: begin mem_buffer_i[0] = 3; mem_end = 1; end
+            4'b1001: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 3; mem_end = 2; end
+            4'b1010: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 3; mem_end = 2;  end
+            4'b1011: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 3; mem_end = 3; end
+            4'b1100: begin mem_buffer_i[0] = 2; mem_buffer_i[1] = 3; mem_end = 2;  end
+            4'b1101: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 2; mem_buffer_i[2] = 3; mem_end = 3; end
+            4'b1110: begin mem_buffer_i[0] = 1; mem_buffer_i[1] = 2; mem_buffer_i[2] = 3; mem_end = 3; end
+            4'b1111: begin mem_buffer_i[0] = 0; mem_buffer_i[1] = 1; mem_buffer_i[2] = 2; mem_buffer_i[3] = 3; mem_end = 4; end
+            default: begin mem_end = 0; end
+            endcase
+
+            casez (multi_list[7:4])
+            4'b0001: begin mem_buffer_i[mem_end + 0] = 0; mem_end = mem_end + 1; end
+            4'b0010: begin mem_buffer_i[mem_end + 0] = 1; mem_end = mem_end + 1; end
+            4'b0011: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_end = mem_end + 2; end
+            4'b0100: begin mem_buffer_i[mem_end + 0] = 2; mem_end = mem_end + 1; end
+            4'b0101: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 2; mem_end = mem_end + 2; end
+            4'b0110: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 2; mem_end = mem_end + 2; end
+            4'b0111: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 2; mem_end = mem_end + 3; end
+            4'b1000: begin mem_buffer_i[mem_end + 0] = 3; mem_end = mem_end + 1; end
+            4'b1001: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2; end
+            4'b1010: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2;  end
+            4'b1011: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
+            4'b1100: begin mem_buffer_i[mem_end + 0] = 2; mem_buffer_i[mem_end + 1] = 3; mem_end = mem_end + 2;  end
+            4'b1101: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 2; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
+            4'b1110: begin mem_buffer_i[mem_end + 0] = 1; mem_buffer_i[mem_end + 1] = 2; mem_buffer_i[mem_end + 2] = 3; mem_end = mem_end + 3; end
+            4'b1111: begin mem_buffer_i[mem_end + 0] = 0; mem_buffer_i[mem_end + 1] = 1; mem_buffer_i[mem_end + 2] = 2; mem_buffer_i[mem_end + 3] = 3; mem_end = mem_end + 4; end
+            default: begin end
+            endcase
+
+            if (multi_list_lr) begin
+                mem_buffer_i[mem_end] = `LR;
+                mem_end = mem_end + 1;
+            end
+
+            if (multi_list_adjust_base) begin
+                n = multi_list_adjust_by_add ? 
+                    n + { mem_end, 2'b0 } : 
+                    n - { mem_end, 2'b0 };
+            end
+
+            { i_serial } = `I_MEM;
+            { mem_scale } = `MEM_SCALE_32BIT;
+            { mem_is_signed } = 0;
+            { reg_ds } = mem_buffer_i[0];
+            { m } = 0;
+            { mem_i } = 1;
+            { mem_continue } = mem_i != mem_end;
+            { mem_req } = !mem_ack;
+        end
+    end
 end
 
 always @(negedge sck or posedge rst) begin
