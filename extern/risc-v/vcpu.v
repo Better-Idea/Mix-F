@@ -141,8 +141,8 @@ always @(posedge (move_req != move_ack)) begin
     // 
 end
 
-reg [31:0]  tmp_ds_mul    ;
-reg [31:0]  tmp_ds_bl     ;
+reg [31:0]  tmp_ds_mul;
+reg [31:0]  tmp_ds_bl;
 
 `define I_ADD               0
 `define I_BITWISE           1
@@ -403,14 +403,10 @@ always @(posedge sck) begin
             { shift_req } = !shift_ack;
         end
 
-        // xor
-
-        default: begin
-            // ebreak
+        default: // ebreak
             if (cmd[15:0] == 16'b1001_0000_0000_0010) begin
                 
             end
-        end
         endcase
     end
     
@@ -532,9 +528,85 @@ always @(posedge sck) begin
     end
     
     // 2'b11
-    default: begin
-        
-    end 
+    default:
+        casez({cmd[31:25], cmd[14:12], cmd[6:2]})
+        // add
+        // addw
+        15'b0000000_000_011?0: begin
+            `define RD      {cmd[11:7]}
+            `define RS1     {cmd[19:15]}
+            `define RS2     {cmd[24:20]}
+
+            { i_serial } = `I_ADD;
+            { reg_ds } = `RD;
+            { n } = r[`RS1];
+            { m } = r[`RS2];
+
+            { add_neg_m } = 0;
+            { add_with_cf } = 0;
+            { add_req } = !add_ack;
+        end
+
+        // addi
+        // addiw
+        15'b???????_000_001?0: begin
+            `define RD      {cmd[11:7]}
+            `define RS1     {cmd[19:15]}
+            `define IMM12   {cmd[31:20]}
+
+            { i_serial } = `I_ADD;
+            { reg_ds } = `RD;
+            { n } = r[`RS1];
+            { m } = { { `SYS_BITS_SUB12{ cmd[31] } }, `IMM12 };
+
+            { add_neg_m } = 0;
+            { add_with_cf } = 0;
+            { add_req } = !add_ack;
+        end
+
+        // or   15'b0000000_111_01000
+        // and  15'b0000000_111_01100
+        // xor  15'b0000000_111_00100
+        15'b0000000_111_0??00: begin
+            `define RD      {cmd[11: 7]}
+            `define RS1     {cmd[19:15]}
+            `define RS2     {cmd[24:20]}
+
+            { i_serial } = `I_BITWISE;
+            { reg_ds } = `RD;
+            { n } = r[`RS1];
+            { m } = r[`RS2];
+
+            { bitwise_m1, bitwise_m0 } = cmd[5:4];
+            { bitwise_req } = !bitwise_ack;
+
+            // TODO: nand 指令并不存在
+        end
+
+        // or   15'b0000000_110_01100
+        // and  15'b0000000_111_01100
+        // xor  15'b0000000_100_01100
+        15'b0000000_1??_01100: begin
+            `define RD      {cmd[11: 7]}
+            `define RS1     {cmd[19:15]}
+            `define RS2     {cmd[24:20]}
+
+            { i_serial } = `I_BITWISE;
+            { reg_ds } = `RD;
+            { n } = r[`RS1];
+            { m } = r[`RS2];
+
+            // 16bit/32bit xor 指令 opc 不一致，bad design
+            { bitwise_m1, bitwise_m0 } = cmd[13:12] == 0 ? 2'b01 : cmd[13:12];
+            { bitwise_req } = !bitwise_ack;
+
+            // TODO: nand 指令并不存在
+        end
+
+        default: begin
+            
+        end
+        endcase
     endcase
 end
 
