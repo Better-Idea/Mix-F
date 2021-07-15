@@ -24,7 +24,7 @@
 module vcpu(
     input           rst,
     input           sck,
-    input  [15:0]   cmd,
+    input  [31:0]   cmd,
     output [31:0]   opt,
     output [31:0]   sta
 );
@@ -583,18 +583,18 @@ always @(posedge sck) begin
             // TODO: nand 指令并不存在
         end
 
-        // or   15'b0000000_110_01100
-        // and  15'b0000000_111_01100
-        // xor  15'b0000000_100_01100
-        15'b0000000_1??_01100: begin
+        // ori  15'b???????_110_00100
+        // andi 15'b???????_111_00100
+        // xori 15'b???????_100_00100
+        15'b???????_1??_00100: begin
             `define RD      {cmd[11: 7]}
             `define RS1     {cmd[19:15]}
-            `define RS2     {cmd[24:20]}
+            `define IMM12   {cmd[31:20]}
 
             { i_serial } = `I_BITWISE;
             { reg_ds } = `RD;
             { n } = r[`RS1];
-            { m } = r[`RS2];
+            { m } = `RS2;
 
             // 16bit/32bit xor 指令 opc 不一致，bad design
             { bitwise_m1, bitwise_m0 } = cmd[13:12] == 0 ? 2'b01 : cmd[13:12];
@@ -602,6 +602,8 @@ always @(posedge sck) begin
 
             // TODO: nand 指令并不存在
         end
+
+        
 
         default: begin
             
