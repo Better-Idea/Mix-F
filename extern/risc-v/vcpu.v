@@ -596,13 +596,25 @@ always @(posedge sck) begin
             { i_serial } = `I_BITWISE;
             { reg_ds } = `RD;
             { n } = r[`RS1];
-            { m } = `RS2;
+            { m } = `IMM12;
 
             // 16bit/32bit xor 指令 opc 不一致，bad design
             { bitwise_m1, bitwise_m0 } = cmd[13:12] == 0 ? 2'b01 : cmd[13:12];
             { bitwise_req } = !bitwise_ack;
 
             // TODO: nand 指令并不存在
+        end
+
+        // auipc
+        15'b???????_???_00101: begin
+            `define RD      {cmd[11:7]}
+            `define IMM20   {cmd[31:12]}
+
+            { i_serial } = `I_MOVE;
+            { reg_ds } = `RD;
+            { n } = { `IMM20, `ALL_ONE12 };
+
+            { move_req } = !move_ack;
         end
 
         default: begin
