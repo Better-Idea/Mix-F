@@ -6,12 +6,14 @@
 `define SYS_BITS_SUB9       23
 `define SYS_BITS_SUB10      22
 `define SYS_BITS_SUB12      20
+`define SYS_BITS_SUB18      14
 `define CAN_WRITE_DS        (reg_ds != 0)
 `define CAN_WRITE_ES        (reg_es != 0)
 `define NOT_WRITE_DS        6'b0
 `define NOT_WRITE_ES        6'b0
 
 `define ALL_ONE             32'hffff_ffff
+`define ALL_ONE12           12'hfff
 `define ALL_ZERO            32'h0000_0000
 
 `define R0                  6'd0
@@ -135,10 +137,10 @@ reg         mem_req = 0;
 reg         mem_ack = 0;
 reg [31:0]  tmp_ds_mem;
 
-always @(posedge (move_req != move_ack)) begin
+always @(posedge (mem_req != mem_ack)) begin
     { tmp_ds_mem } = n + m;
 
-    // 
+    // TODO:
 end
 
 reg [31:0]  tmp_ds_mul;
@@ -359,7 +361,7 @@ always @(posedge sck) begin
                 { reg_ds } = `RD;
                 // { reg_es } = `NOT_WRITE_ES;
                 { n } = `IS_UPPER ? 
-                    { {`SYS_BITS_SUB12{ cmd[12] }}, `IMM6 << 12 } : 
+                    { {`SYS_BITS_SUB18{ cmd[12] }}, `IMM6 << 12 } : 
                     { {`SYS_BITS_SUB6{ cmd[12] }}, `IMM6 };
                 // { m } = 0;
 
@@ -602,8 +604,6 @@ always @(posedge sck) begin
 
             // TODO: nand 指令并不存在
         end
-
-        
 
         default: begin
             
